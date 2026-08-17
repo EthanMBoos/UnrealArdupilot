@@ -1,8 +1,8 @@
 # Third-party notices
 
-UnrealArdupilot is licensed under the [MIT License](LICENSE). That license applies only to code and
-documentation authored for this repository. External software, data, services, and engine content
-keep their own terms.
+UnrealVehicleDynamics is licensed under the [MIT License](LICENSE). That license applies only to code
+and documentation authored for this repository. External software, data, services, and engine
+content keep their own terms.
 
 ArduPilot is GPL-3.0 and runs as a separately installed Docker container. It is not linked into or
 packaged with the Unreal plugin. See the pinned [ArduPilot license](https://github.com/ArduPilot/ardupilot/blob/e0652af4c0c9657c04672ed3e21b71de75c74763/COPYING.txt).

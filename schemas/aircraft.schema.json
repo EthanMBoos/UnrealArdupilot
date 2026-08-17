@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unrealvehicledynamics.local/schemas/aircraft-v1.json",
+  "title": "UnrealVehicleDynamics aircraft configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "model_id", "source", "mass_kg", "inertia_kgm2", "geometry", "aerodynamics", "propeller", "actuators", "channel_map", "validity"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "model_id": {"type": "string", "minLength": 1},
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "url", "commit", "sha256", "license"],
+      "properties": {
+        "name": {"type": "string"}, "url": {"type": "string"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "license": {"type": "string"}
+      }
+    },
+    "mass_kg": {"type": "number", "exclusiveMinimum": 0},
+    "inertia_kgm2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["jx", "jy", "jz", "jxz"],
+      "properties": {"jx":{"type":"number","exclusiveMinimum":0}, "jy":{"type":"number","exclusiveMinimum":0}, "jz":{"type":"number","exclusiveMinimum":0}, "jxz":{"type":"number"}}
+    },
+    "geometry": {
+      "type":"object", "additionalProperties":false,
+      "required":["wing_area_m2","span_m","chord_m","oswald_efficiency","aspect_ratio"],
+      "properties": {
+        "wing_area_m2":{"type":"number","exclusiveMinimum":0}, "span_m":{"type":"number","exclusiveMinimum":0},
+        "chord_m":{"type":"number","exclusiveMinimum":0}, "oswald_efficiency":{"type":"number","exclusiveMinimum":0},
+        "aspect_ratio":{"type":"number","exclusiveMinimum":0}
+      }
+    },
+    "aerodynamics": {
+      "type":"object", "additionalProperties":{"type":"number"},
+      "required":["CL0","CL_alpha","CL_q","CL_de","CD_p","CD_q","CD_de","CY0","CY_beta","CY_p","CY_r","CY_da","CY_dr","Cl0","Cl_beta","Cl_p","Cl_r","Cl_da","Cl_dr","Cm0","Cm_alpha","Cm_q","Cm_de","Cn0","Cn_beta","Cn_p","Cn_r","Cn_da","Cn_dr","alpha0_rad","lift_blend_M"]
+    },
+    "propeller": {
+      "type":"object", "additionalProperties":false,
+      "required":["diameter_m","KV_rpm_per_volt","resistance_ohm","no_load_current_amp","max_voltage_v","CQ","CT","position_body_m","advance_ratio_range"],
+      "properties": {
+        "diameter_m":{"type":"number","exclusiveMinimum":0}, "KV_rpm_per_volt":{"type":"number","exclusiveMinimum":0},
+        "resistance_ohm":{"type":"number","exclusiveMinimum":0}, "no_load_current_amp":{"type":"number","minimum":0},
+        "max_voltage_v":{"type":"number","exclusiveMinimum":0},
+        "CQ":{"$ref":"#/$defs/triple"}, "CT":{"$ref":"#/$defs/triple"}, "position_body_m":{"$ref":"#/$defs/vec3"},
+        "advance_ratio_range":{"$ref":"#/$defs/range"}
+      }
+    },
+    "actuators": {
+      "type":"object", "additionalProperties":false, "required":["aileron","elevator","rudder"],
+      "properties":{"aileron":{"$ref":"#/$defs/surface"},"elevator":{"$ref":"#/$defs/surface"},"rudder":{"$ref":"#/$defs/surface"}}
+    },
+    "channel_map": {
+      "type":"array", "minItems":4, "items":{
+        "type":"object", "additionalProperties":false, "required":["channel","function","pwm_min","pwm_trim","pwm_max","reversed"],
+        "properties":{"channel":{"type":"integer","minimum":1,"maximum":32},"function":{"enum":["aileron","elevator","rudder","throttle"]},"pwm_min":{"type":"integer"},"pwm_trim":{"type":"integer"},"pwm_max":{"type":"integer"},"reversed":{"type":"boolean"}}
+      }
+    },
+    "validity": {
+      "type":"object", "additionalProperties":false,
+      "required":["true_airspeed_mps","alpha_deg","beta_deg","normalized_body_rates","surface_deg","altitude_m"],
+      "properties":{"true_airspeed_mps":{"$ref":"#/$defs/range"},"alpha_deg":{"$ref":"#/$defs/range"},"beta_deg":{"$ref":"#/$defs/range"},"normalized_body_rates":{"$ref":"#/$defs/range"},"surface_deg":{"$ref":"#/$defs/range"},"altitude_m":{"$ref":"#/$defs/range"}}
+    }
+  },
+  "$defs": {
+    "vec3":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"number"}},
+    "triple":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"number"}},
+    "range":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}},
+    "surface":{"type":"object","additionalProperties":false,"required":["neutral_rad","min_rad","max_rad","direction"],"properties":{"neutral_rad":{"type":"number"},"min_rad":{"type":"number"},"max_rad":{"type":"number"},"direction":{"enum":[-1,1]}}}
+  }
+}

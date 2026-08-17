@@ -60,12 +60,28 @@ q_hat = q c / (2 V)
 r_hat = r b / (2 V)
 ```
 
-At `V=0`, aerodynamic force and moment are exactly zero. Near zero, calculate the rate loads in an
-algebraically cancelled form so there is no `0/0` or leftover force.
+At `V=0`, aerodynamic force and moment are exactly zero. Below `V=1e-12 m/s`, set the normalized
+rate terms to zero rather than divide by `V`; dynamic pressure drives the remaining aerodynamic
+loads smoothly to zero.
 
 There are no `alpha_dot` terms in this model because the source data doesn't contain them. Adding
 previous-step acceleration would quietly create a delayed, timestep-dependent model. If a later
 aircraft needs unsteady aerodynamics, give it a real state-space or implicit model.
+
+The C++ implementation preserves the same mathematical stages instead of expanding them into one
+large function:
+
+```text
+state + atmosphere
+  -> AirData {V, alpha, beta, qbar, p_hat, q_hat, r_hat}
+  -> AeroCoefficientSet {C_L, C_D, C_Y, C_ell, C_m, C_n}
+  -> AerodynamicsOutput {air data, coefficients, body wrench}
+```
+
+Runtime vectors, matrices, and quaternions are fixed-size Eigen types. Domain structs and member
+names carry the frame and units; bare vector indices are not used to distinguish physical values.
+`fixed_wing.cpp` keeps the complete aircraft wrench calculation together; `rigid_body.cpp` owns
+generic mechanics and integration.
 
 ## Aerodynamics
 
@@ -154,9 +170,25 @@ side-force and yaw coefficients. The channel map records the real left/right sur
 to produce those model signs. Any later lag needs explicit actuator state.
 
 Use the BYU electric motor and polynomial `C_T/C_Q` propeller equations with their original
-constants. Thrust points along body `+X`; reaction torque acts about `X`; an offset propeller also
-adds `r_prop x T`. `aircraft.json` declares the fitted advance-ratio range. Reference runs fail when
-they leave it. Exploratory runs may continue only with finite output and a logged out-of-range flag;
+constants:
+
+```text
+C_T(J) = CT2 J^2 + CT1 J + CT0
+C_Q(J) = CQ2 J^2 + CQ1 J + CQ0
+J      = 2 pi V_a / (omega D)
+
+a = rho D^5 CQ0 / (4 pi^2)
+b = rho D^4 CQ1 V_a / (2 pi) + K_Q^2 / R_motor
+c = rho D^3 CQ2 V_a^2 - K_Q V_in / R_motor + K_Q i_0
+
+omega = (-b + sqrt(b^2 - 4ac)) / (2a)
+T     = rho n^2 D^4 C_T(J)
+Q     = rho n^2 D^5 C_Q(J),       n = omega / (2 pi)
+```
+
+Thrust points along body `+X`; reaction torque acts about `X`; an offset propeller also adds
+`r_prop x T`. `aircraft.json` declares the fitted advance-ratio range. Reference runs fail when they
+leave it. Exploratory runs may continue only with finite output and a logged out-of-range flag;
 invalid roots or nonfinite values always fail the run.
 
 Battery state, spool time, propwash, gyroscopic effects, variable pitch, and multiple engines can
@@ -181,15 +213,14 @@ bounds:      alpha [-10,12]°, beta ±10°, surfaces ±15°, throttle [0,1]
 ```
 
 Position is allowed to move; straight flight is not a stationary point in NED. Save the complete
-state, command, effectors, residuals, bounds, solver result, environment, and config hashes in
+state, command, effectors, residuals, bounds, solver result, and environment in
 `results/operating_point.json`.
 
 Trim passes when each linear and angular acceleration residual is at most `1e-5` in SI units,
 airspeed and vertical-speed error are each at most `1e-5 m/s`, and no control sits on a bound. A 10 s
 CLI run must also drift less than `0.05 m/s` in airspeed, `0.5 m` in altitude, and `0.1°` in attitude.
 
-Later runs reference this operating point by hash so they cannot silently use a different
-aircraft or environment.
+Later runs may reference this operating point by path.
 
 ## Linearization
 
@@ -207,7 +238,7 @@ The default `aircraft_command` input uses normalized aileron, elevator, rudder, 
 controls work. The diagnostic `aircraft_effector` input bypasses that mapping and uses surface
 radians and throttle directly when checking equations.
 
-Save scales, limits, perturbation sizes, `dt`, integrator, input boundary, and all relevant hashes in
+Save scales, limits, perturbation sizes, `dt`, integrator, and input boundary in
 `results/linear_model.json`.
 
 Run differences at `h`, `h/2`, and `h/4`. The scaled change in both A and B should be no more than
@@ -222,7 +253,7 @@ Schedules use integer ticks. A row with `apply_tick=k` takes effect before inter
 input; later rows may omit channels to hold their old value.
 
 Each schedule names its input boundary, whether values are absolute or offsets from trim, the trim
-hash, and its final hold/stop rule. Reject duplicate or out-of-order ticks, unknown channels, off-grid
+path, and its final hold/stop rule. Reject duplicate or out-of-order ticks, unknown channels, off-grid
 times, and limit violations.
 
 ## JSBSim comparison
@@ -268,7 +299,7 @@ need an explicit conversion.
 
 ## Checks before Unreal
 
-Configuration loading rejects bad mass, inertia, geometry, bounds, names, numbers, or hashes. Hand
+Configuration loading rejects bad mass, inertia, geometry, bounds, names, or numbers. Hand
 cases cover zero and positive angle of attack, sideslip, every rate, every control, symmetry,
 restoring signs, control direction, and drag direction. A sweep over `V=0..60 m/s`, full
 mathematical alpha and beta, normalized rates up to ±0.2, and bounded controls must stay finite and

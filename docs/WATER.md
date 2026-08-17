@@ -178,7 +178,7 @@ K_core    = Q K_bem Q^T
 Fexc_core = Q Fexc_bem
 ```
 
-Save the mesh and input hashes, solver version, axes, origin, scale, displaced volume, waterline,
+Save the mesh provenance, solver version, axes, origin, scale, displaced volume, waterline,
 density, gravity, depth, frequencies, headings, phasor convention, `A(omega)`, `B(omega)`, `A_inf`,
 `K_hs`, excitation forces, and coefficient-quality report.
 
@@ -230,7 +230,7 @@ struct WaveComponent {
 ```
 
 Start with regular waves. Add deterministic PM/JONSWAP component sums later. Save the actual sorted
-component list and its hash, not only a random seed.
+component list, not only a random seed.
 
 Use one convention everywhere:
 

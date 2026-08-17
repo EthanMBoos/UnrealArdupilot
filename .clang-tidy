@@ -1,0 +1,4 @@
+Checks: '-*,clang-analyzer-*'
+HeaderFilterRegex: '(^|.*/)(core|tools|tests)/.*'
+FormatStyle: file
+SystemHeaders: false

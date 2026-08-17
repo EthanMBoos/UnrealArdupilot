@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "model_id": "mavsim_aerosonde_educational",
+  "source": {
+    "name": "BYU MAVSim aerosonde_parameters.py",
+    "url": "https://github.com/byu-magicc/mavsim_public/blob/a8489bbc30ab9e746dccac8ac614ab2f8acac6bb/mavsim_python/parameters/aerosonde_parameters.py",
+    "commit": "a8489bbc30ab9e746dccac8ac614ab2f8acac6bb",
+    "sha256": "2642b1264d85c3d1b96461b38420a74181a58f367fffeca053072854a11d7fea",
+    "license": "GPL-3.0"
+  },
+  "mass_kg": 11.0,
+  "inertia_kgm2": {"jx": 0.8244, "jy": 1.135, "jz": 1.759, "jxz": 0.1204},
+  "geometry": {"wing_area_m2": 0.55, "span_m": 2.8956, "chord_m": 0.18994, "oswald_efficiency": 0.9, "aspect_ratio": 15.244544290909088},
+  "aerodynamics": {
+    "CL0": 0.23, "CL_alpha": 5.61, "CL_q": 7.95, "CL_de": 0.13,
+    "CD_p": 0.043, "CD_q": 0.0, "CD_de": 0.0135,
+    "CY0": 0.0, "CY_beta": -0.98, "CY_p": 0.0, "CY_r": 0.0, "CY_da": 0.075, "CY_dr": 0.19,
+    "Cl0": 0.0, "Cl_beta": -0.13, "Cl_p": -0.51, "Cl_r": 0.25, "Cl_da": 0.17, "Cl_dr": 0.0024,
+    "Cm0": 0.0135, "Cm_alpha": -2.74, "Cm_q": -38.21, "Cm_de": -0.99,
+    "Cn0": 0.0, "Cn_beta": 0.073, "Cn_p": 0.069, "Cn_r": -0.095, "Cn_da": -0.011, "Cn_dr": -0.069,
+    "alpha0_rad": 0.47, "lift_blend_M": 50.0
+  },
+  "propeller": {
+    "diameter_m": 0.508, "KV_rpm_per_volt": 145.0, "resistance_ohm": 0.042,
+    "no_load_current_amp": 1.5, "max_voltage_v": 44.4,
+    "CQ": [-0.01664, 0.004970, 0.005230], "CT": [-0.1079, -0.06044, 0.09357],
+    "position_body_m": [0.0, 0.0, 0.0], "advance_ratio_range": [0.0, 1.2]
+  },
+  "actuators": {
+    "aileron": {"neutral_rad": 0.0, "min_rad": -0.2617993877991494, "max_rad": 0.2617993877991494, "direction": 1},
+    "elevator": {"neutral_rad": 0.0, "min_rad": -0.2617993877991494, "max_rad": 0.2617993877991494, "direction": 1},
+    "rudder": {"neutral_rad": 0.0, "min_rad": -0.2617993877991494, "max_rad": 0.2617993877991494, "direction": 1}
+  },
+  "channel_map": [
+    {"channel": 1, "function": "aileron", "pwm_min": 1000, "pwm_trim": 1500, "pwm_max": 2000, "reversed": false},
+    {"channel": 2, "function": "elevator", "pwm_min": 1000, "pwm_trim": 1500, "pwm_max": 2000, "reversed": false},
+    {"channel": 3, "function": "throttle", "pwm_min": 1000, "pwm_trim": 1000, "pwm_max": 2000, "reversed": false},
+    {"channel": 4, "function": "rudder", "pwm_min": 1000, "pwm_trim": 1500, "pwm_max": 2000, "reversed": false}
+  ],
+  "validity": {"true_airspeed_mps": [18,40], "alpha_deg": [-10,12], "beta_deg": [-10,10], "normalized_body_rates": [-0.2,0.2], "surface_deg": [-15,15], "altitude_m": [0,3000]}
+}

@@ -1,0 +1,27 @@
+name: headless
+on:
+  push:
+  pull_request:
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: 3.31.6
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUVD_WARNINGS_AS_ERRORS=ON
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure
+      - run: uv sync --locked
+      - run: uv run --locked python tools/jsbsim_compare.py --samples 200
+      - run: uv run --locked python tools/timestep_convergence.py
+      - run: build/uvd validate examples/aircraft/aerosonde.json
+      - run: build/uvd validate examples/runs/headless.json
+      - run: build/uvd simulate examples/runs/headless.json --output runs/ci
+      - run: build/uvd replay runs/ci
