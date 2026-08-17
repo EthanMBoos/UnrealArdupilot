@@ -1,10 +1,6 @@
 # Literature review and research direction
 
-**Review date:** 17 August 2026
-
 **Primary window:** January 2025 through 17 August 2026
-
-**Project examined:** the current `UnrealVehicleDynamics` repository
 
 ## Executive conclusion
 
