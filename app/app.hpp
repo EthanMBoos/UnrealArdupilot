@@ -60,6 +60,7 @@ struct ScheduledInput {
 
 struct ScheduleEntry {
   std::uint64_t tick{};
+  std::uint64_t arrival_tick{};
   ScheduledInput values;
 };
 

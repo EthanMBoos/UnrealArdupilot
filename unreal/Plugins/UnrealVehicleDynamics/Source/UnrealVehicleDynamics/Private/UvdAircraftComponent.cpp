@@ -2,26 +2,50 @@
 
 #include <atomic>
 #include <limits>
+#include <numbers>
 
+#include "Chaos/ChaosEngineInterface.h"
 #include "Components/PrimitiveComponent.h"
 #include "Dom/JsonObject.h"
 #include "Eigen/Eigenvalues"
+#include "Engine/Engine.h"
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Physics/Experimental/PhysInterface_Chaos.h"
 #include "Physics/Experimental/PhysicsThreadLibrary.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "uvd/core.hpp"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUvdAircraft, Log, All);
 
+enum class EUvdProbeKind : uint8 {
+  Aircraft,
+  UnitForce,
+  UnitTorque,
+};
+
 struct FUvdScheduledCommand {
-  uint64 ApplyTick = 0;
+  uint64 ScheduledTick = 0;
+  uint64 ArrivalTick = 0;
+  uint64 AppliedTick = std::numeric_limits<uint64>::max();
   uvd::AircraftCommand Command;
+};
+
+struct FUvdIntervalSample {
+  uint64 Interval = 0;
+  uvd::AircraftCommand Command;
+  uvd::AircraftEffectorState Effectors;
+  uvd::AtmosphereSnapshot Atmosphere;
+  uvd::AircraftModelOutput Model;
 };
 
 struct FUvdAircraftRuntime {
@@ -31,12 +55,37 @@ struct FUvdAircraftRuntime {
   uvd::RigidBodyState FinalState;
   uvd::BodyWrench FinalWrench;
   TArray<FUvdScheduledCommand> Schedule;
+  TArray<uvd::RigidBodyState> StateByTick;
+  TArray<FUvdIntervalSample> IntervalSamples;
   double FixedDtS = 1.0 / 120.0;
   double MinObservedDtS = std::numeric_limits<double>::infinity();
   double MaxObservedDtS = 0.0;
   uint64 FinalTick = 0;
   uint64 StepIndex = 0;
+  std::atomic<uint64> CompletedSteps{0};
   int32 NextScheduleIndex = 0;
+  uint64 CommandIntervalRecords = 0;
+  uint64 HeldDueToDelayIntervals = 0;
+  uint64 LateCommandUpdates = 0;
+  EUvdProbeKind ProbeKind = EUvdProbeKind::Aircraft;
+  double RenderRateHz = 0.0;
+  uint64 RenderFrames = 0;
+  double StartWallTimeS = 0.0;
+  bool HitchConfigured = false;
+  bool HitchInjected = false;
+  uint64 HitchAtTick = 0;
+  double HitchDurationS = 0.0;
+  uint64 HitchStartStep = 0;
+  uint64 HitchWakeStep = 0;
+  uint64 HitchEndStep = 0;
+  int32 HitchObservationFramesRemaining = 0;
+  double CallbackTotalS = 0.0;
+  double CallbackMaximumS = 0.0;
+  double TargetMassKg = 0.0;
+  double ObservedMassKg = 0.0;
+  uvd::Matrix3 TargetInertiaBodyKgm2 = uvd::Matrix3::Zero();
+  uvd::Matrix3 ObservedInertiaBodyKgm2 = uvd::Matrix3::Zero();
+  uvd::Vector3 ObservedComLocalM = uvd::Vector3::Zero();
   std::atomic<int32> FailureCode{0};
   std::atomic<bool> Finished{false};
   bool ReportWritten = false;
@@ -186,7 +235,7 @@ bool LoadParameters(const FString& Path, uvd::AerosondeParameters& Parameters) {
   const TSharedPtr<FJsonObject> Aero =
       Root->GetObjectField(TEXT("aerodynamics"));
   uvd::AeroDerivatives& C = Parameters.aero;
-  C.C_L_0 = Number(Aero, TEXT("CL0"));
+  C.C_L_0 = Number(Aero, TEXT("CL_0"));
   C.C_L_alpha = Number(Aero, TEXT("CL_alpha"));
   C.C_L_q = Number(Aero, TEXT("CL_q"));
   C.C_L_delta_e = Number(Aero, TEXT("CL_de"));
@@ -223,7 +272,8 @@ bool LoadParameters(const FString& Path, uvd::AerosondeParameters& Parameters) {
   uvd::PropellerParameters& Prop = Parameters.propeller;
   Prop.diameter_m = Number(Propeller, TEXT("diameter_m"));
   const double Kv = Number(Propeller, TEXT("KV_rpm_per_volt"));
-  Prop.motor_torque_constant_Nm_per_A = (1.0 / Kv) * 60.0 / (2.0 * UE_PI);
+  Prop.motor_torque_constant_Nm_per_A =
+      (1.0 / Kv) * 60.0 / (2.0 * std::numbers::pi);
   Prop.resistance_ohm = Number(Propeller, TEXT("resistance_ohm"));
   Prop.no_load_current_A = Number(Propeller, TEXT("no_load_current_amp"));
   Prop.max_voltage_V = Number(Propeller, TEXT("max_voltage_v"));
@@ -260,6 +310,30 @@ TArray<TSharedPtr<FJsonValue>> JsonVector(const uvd::Vector3& Value) {
           MakeShared<FJsonValueNumber>(Value.z())};
 }
 
+TArray<TSharedPtr<FJsonValue>> JsonMatrix(const uvd::Matrix3& Value) {
+  TArray<TSharedPtr<FJsonValue>> Rows;
+  for (int32 Row = 0; Row < 3; ++Row) {
+    TArray<TSharedPtr<FJsonValue>> Values;
+    for (int32 Column = 0; Column < 3; ++Column) {
+      Values.Add(MakeShared<FJsonValueNumber>(Value(Row, Column)));
+    }
+    Rows.Add(MakeShared<FJsonValueArray>(Values));
+  }
+  return Rows;
+}
+
+FString ProbeKindName(EUvdProbeKind Kind) {
+  switch (Kind) {
+    case EUvdProbeKind::Aircraft:
+      return TEXT("aircraft");
+    case EUvdProbeKind::UnitForce:
+      return TEXT("unit_force");
+    case EUvdProbeKind::UnitTorque:
+      return TEXT("unit_torque");
+  }
+  return TEXT("unknown");
+}
+
 TSharedPtr<FJsonObject> JsonState(const uvd::RigidBodyState& State) {
   TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
   Result->SetArrayField(TEXT("position_ned_m"),
@@ -283,6 +357,148 @@ bool SaveJson(const FString& Path, const TSharedPtr<FJsonObject>& Object) {
       TJsonWriterFactory<>::Create(&Rendered);
   return FJsonSerializer::Serialize(Object.ToSharedRef(), Writer) &&
          FFileHelper::SaveStringToFile(Rendered + TEXT("\n"), *Path);
+}
+
+void AppendCsvNumber(FString& Output, double Value) {
+  Output += FString::Printf(TEXT(",%.17g"), Value);
+}
+
+TSharedPtr<FJsonObject> JsonEffectors(
+    const uvd::AircraftEffectorState& Effectors) {
+  TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+  Result->SetNumberField(TEXT("aileron_rad"), Effectors.aileron_rad);
+  Result->SetNumberField(TEXT("elevator_rad"), Effectors.elevator_rad);
+  Result->SetNumberField(TEXT("rudder_rad"), Effectors.rudder_rad);
+  Result->SetNumberField(TEXT("throttle"), Effectors.throttle);
+  return Result;
+}
+
+TSharedPtr<FJsonObject> JsonWrench(const uvd::BodyWrench& Wrench) {
+  TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+  Result->SetArrayField(TEXT("force_body_N"), JsonVector(Wrench.force_body_N));
+  Result->SetArrayField(TEXT("moment_body_Nm"),
+                        JsonVector(Wrench.moment_body_Nm));
+  return Result;
+}
+
+bool SaveAircraftEvidence(const FString& BundlePath,
+                          const FUvdAircraftRuntime& Runtime) {
+  if (Runtime.ProbeKind != EUvdProbeKind::Aircraft) {
+    return true;
+  }
+  if (Runtime.IntervalSamples.Num() != static_cast<int32>(Runtime.StepIndex) ||
+      Runtime.StateByTick.Num() != static_cast<int32>(Runtime.StepIndex + 1)) {
+    UE_LOG(LogUvdAircraft, Error,
+           TEXT("Incomplete Unreal evidence: %d intervals, %d states, %llu "
+                "steps"),
+           Runtime.IntervalSamples.Num(), Runtime.StateByTick.Num(),
+           Runtime.StepIndex);
+    return false;
+  }
+
+  FString Signals =
+      TEXT("tick,time_s,pn_m,pe_m,pd_m,qw,qx,qy,qz,u_mps,v_mps,w_mps,p_") TEXT(
+          "radps,q_radps,r_radps,cmd_aileron,cmd_elevator,cmd_rudder,cmd_")
+          TEXT("throttle,eff_aileron_rad,eff_elevator_rad,eff_rudder_rad,eff_")
+              TEXT(
+                  "throttle,tas_mps,eas_mps,alpha_rad,beta_rad,rho_kgpm3,fx_"
+                  "aero_n,")
+                  TEXT(
+                      "fy_aero_n,fz_aero_n,l_aero_nm,m_aero_nm,n_aero_nm,fx_"
+                      "prop_n,l_") TEXT("prop_nm,prop_j,prop_in_range\n");
+  FString ModelSamples;
+  Signals.Reserve(Runtime.IntervalSamples.Num() * 720);
+  ModelSamples.Reserve(Runtime.IntervalSamples.Num() * 640);
+  for (int32 Index = 0; Index < Runtime.IntervalSamples.Num(); ++Index) {
+    const FUvdIntervalSample& Sample = Runtime.IntervalSamples[Index];
+    const uvd::RigidBodyState& State = Runtime.StateByTick[Index + 1];
+    const uvd::AirData& Air = Sample.Model.aerodynamics.air_data;
+    const uvd::BodyWrench& Aero = Sample.Model.aerodynamics.wrench;
+    const uvd::PropellerOutput& Prop = Sample.Model.propulsion;
+    Signals += FString::Printf(TEXT("%llu"), Sample.Interval + 1);
+    AppendCsvNumber(
+        Signals, static_cast<double>(Sample.Interval + 1) * Runtime.FixedDtS);
+    AppendCsvNumber(Signals, State.position_ned_m.x());
+    AppendCsvNumber(Signals, State.position_ned_m.y());
+    AppendCsvNumber(Signals, State.position_ned_m.z());
+    AppendCsvNumber(Signals, State.q_body_to_ned.w());
+    AppendCsvNumber(Signals, State.q_body_to_ned.x());
+    AppendCsvNumber(Signals, State.q_body_to_ned.y());
+    AppendCsvNumber(Signals, State.q_body_to_ned.z());
+    AppendCsvNumber(Signals, State.velocity_body_mps.x());
+    AppendCsvNumber(Signals, State.velocity_body_mps.y());
+    AppendCsvNumber(Signals, State.velocity_body_mps.z());
+    AppendCsvNumber(Signals, State.omega_body_radps.x());
+    AppendCsvNumber(Signals, State.omega_body_radps.y());
+    AppendCsvNumber(Signals, State.omega_body_radps.z());
+    AppendCsvNumber(Signals, Sample.Command.aileron);
+    AppendCsvNumber(Signals, Sample.Command.elevator);
+    AppendCsvNumber(Signals, Sample.Command.rudder);
+    AppendCsvNumber(Signals, Sample.Command.throttle);
+    AppendCsvNumber(Signals, Sample.Effectors.aileron_rad);
+    AppendCsvNumber(Signals, Sample.Effectors.elevator_rad);
+    AppendCsvNumber(Signals, Sample.Effectors.rudder_rad);
+    AppendCsvNumber(Signals, Sample.Effectors.throttle);
+    AppendCsvNumber(Signals, Air.true_airspeed_mps);
+    AppendCsvNumber(Signals, Air.equivalent_airspeed_mps);
+    AppendCsvNumber(Signals, Air.alpha_rad);
+    AppendCsvNumber(Signals, Air.beta_rad);
+    AppendCsvNumber(Signals, Sample.Atmosphere.density_kgpm3);
+    AppendCsvNumber(Signals, Aero.force_body_N.x());
+    AppendCsvNumber(Signals, Aero.force_body_N.y());
+    AppendCsvNumber(Signals, Aero.force_body_N.z());
+    AppendCsvNumber(Signals, Aero.moment_body_Nm.x());
+    AppendCsvNumber(Signals, Aero.moment_body_Nm.y());
+    AppendCsvNumber(Signals, Aero.moment_body_Nm.z());
+    AppendCsvNumber(Signals, Prop.wrench.force_body_N.x());
+    AppendCsvNumber(Signals, Prop.wrench.moment_body_Nm.x());
+    AppendCsvNumber(Signals, Prop.advance_ratio);
+    AppendCsvNumber(Signals, Prop.advance_ratio_in_range ? 1.0 : 0.0);
+    Signals += TEXT("\n");
+
+    TSharedPtr<FJsonObject> ModelInput = MakeShared<FJsonObject>();
+    ModelInput->SetNumberField(TEXT("interval_start_tick"),
+                               static_cast<double>(Sample.Interval));
+    ModelInput->SetObjectField(TEXT("state"),
+                               JsonState(Runtime.StateByTick[Index]));
+    ModelInput->SetObjectField(TEXT("effectors"),
+                               JsonEffectors(Sample.Effectors));
+    ModelInput->SetNumberField(TEXT("altitude_msl_m"),
+                               Sample.Atmosphere.altitude_msl_m);
+    ModelInput->SetArrayField(TEXT("wind_ned_mps"),
+                              JsonVector(Sample.Atmosphere.wind_ned_mps));
+    ModelInput->SetObjectField(TEXT("unreal_total_wrench"),
+                               JsonWrench(Sample.Model.total_wrench));
+    FString Rendered;
+    const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>>
+        Writer =
+            TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(
+                &Rendered);
+    if (!FJsonSerializer::Serialize(ModelInput.ToSharedRef(), Writer)) {
+      return false;
+    }
+    ModelSamples += Rendered + TEXT("\n");
+  }
+
+  TSharedPtr<FJsonObject> Metadata = MakeShared<FJsonObject>();
+  Metadata->SetNumberField(TEXT("schema_version"), 1);
+  Metadata->SetStringField(
+      TEXT("sample_timing"),
+      TEXT("state at tick n; command, atmosphere and wrench apply over "
+           "[n-1,n)"));
+  TSharedPtr<FJsonObject> Frames = MakeShared<FJsonObject>();
+  Frames->SetStringField(TEXT("position"), TEXT("NED"));
+  Frames->SetStringField(TEXT("body"), TEXT("FRD"));
+  Metadata->SetObjectField(TEXT("frames"), Frames);
+  Metadata->SetStringField(TEXT("units"), TEXT("encoded in CSV column names"));
+
+  return FFileHelper::SaveStringToFile(
+             Signals, *FPaths::Combine(BundlePath, TEXT("signals.csv"))) &&
+         SaveJson(FPaths::Combine(BundlePath, TEXT("signals.json")),
+                  Metadata) &&
+         FFileHelper::SaveStringToFile(
+             ModelSamples,
+             *FPaths::Combine(BundlePath, TEXT("unreal_model_samples.jsonl")));
 }
 
 FString FailureReason(int32 FailureCode) {
@@ -327,6 +543,14 @@ void UUvdAircraftComponent::BeginPlay() {
     return;
   }
   SetInitialState();
+  if (Runtime->RenderRateHz > 0.0 && GEngine) {
+    if (IConsoleVariable* VSync =
+            IConsoleManager::Get().FindConsoleVariable(TEXT("r.VSync"))) {
+      VSync->Set(0, ECVF_SetByCode);
+    }
+    GEngine->SetMaxFPS(static_cast<float>(Runtime->RenderRateHz));
+  }
+  Runtime->StartWallTimeS = FPlatformTime::Seconds();
   SetAsyncPhysicsTickEnabled(true);
 }
 
@@ -341,6 +565,26 @@ void UUvdAircraftComponent::TickComponent(
     float DeltaTime, ELevelTick TickType,
     FActorComponentTickFunction* ThisTickFunction) {
   Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+  if (Runtime) {
+    ++Runtime->RenderFrames;
+    const uint64 CompletedSteps =
+        Runtime->CompletedSteps.load(std::memory_order_acquire);
+    if (Runtime->HitchConfigured && !Runtime->HitchInjected &&
+        CompletedSteps >= Runtime->HitchAtTick) {
+      Runtime->HitchInjected = true;
+      Runtime->HitchStartStep = CompletedSteps;
+      FPlatformProcess::SleepNoStats(
+          static_cast<float>(Runtime->HitchDurationS));
+      Runtime->HitchWakeStep =
+          Runtime->CompletedSteps.load(std::memory_order_acquire);
+      Runtime->HitchEndStep = Runtime->HitchWakeStep;
+      Runtime->HitchObservationFramesRemaining = 2;
+    } else if (Runtime->HitchInjected &&
+               Runtime->HitchObservationFramesRemaining > 0) {
+      Runtime->HitchEndStep = CompletedSteps;
+      --Runtime->HitchObservationFramesRemaining;
+    }
+  }
   if (Runtime && Runtime->Finished.load(std::memory_order_acquire) &&
       !Runtime->ReportWritten) {
     FinishRun();
@@ -407,6 +651,32 @@ bool UUvdAircraftComponent::LoadRun() {
       .omega_body_radps = Vector3(Initial, TEXT("omega_body_radps")),
   };
 
+  if (Root->HasField(TEXT("unreal_probe"))) {
+    const TSharedPtr<FJsonObject> Probe =
+        Root->GetObjectField(TEXT("unreal_probe"));
+    const FString Kind = Probe->GetStringField(TEXT("kind"));
+    if (Kind == TEXT("aircraft")) {
+      Runtime->ProbeKind = EUvdProbeKind::Aircraft;
+    } else if (Kind == TEXT("unit_force")) {
+      Runtime->ProbeKind = EUvdProbeKind::UnitForce;
+    } else if (Kind == TEXT("unit_torque")) {
+      Runtime->ProbeKind = EUvdProbeKind::UnitTorque;
+    } else {
+      UE_LOG(LogUvdAircraft, Error, TEXT("Unknown Unreal probe kind: %s"),
+             *Kind);
+      return false;
+    }
+    Runtime->RenderRateHz = Probe->GetNumberField(TEXT("render_rate_hz"));
+    if (Probe->HasField(TEXT("render_hitch"))) {
+      const TSharedPtr<FJsonObject> Hitch =
+          Probe->GetObjectField(TEXT("render_hitch"));
+      Runtime->HitchConfigured = true;
+      Runtime->HitchAtTick =
+          static_cast<uint64>(Hitch->GetNumberField(TEXT("at_tick")));
+      Runtime->HitchDurationS = Hitch->GetNumberField(TEXT("duration_s"));
+    }
+  }
+
   const TSharedPtr<FJsonObject> Controls =
       Root->GetObjectField(TEXT("controls"));
   if (Controls->GetStringField(TEXT("input_boundary")) !=
@@ -435,18 +705,26 @@ bool UUvdAircraftComponent::LoadRun() {
     if (Values->HasField(TEXT("throttle"))) {
       HeldCommand.throttle = Values->GetNumberField(TEXT("throttle"));
     }
+    const uint64 ScheduledTick =
+        static_cast<uint64>(Entry->GetNumberField(TEXT("apply_tick")));
+    const uint64 ArrivalTick =
+        Entry->HasField(TEXT("arrival_tick"))
+            ? static_cast<uint64>(Entry->GetNumberField(TEXT("arrival_tick")))
+            : ScheduledTick;
     Runtime->Schedule.Add({
-        .ApplyTick =
-            static_cast<uint64>(Entry->GetNumberField(TEXT("apply_tick"))),
+        .ScheduledTick = ScheduledTick,
+        .ArrivalTick = ArrivalTick,
         .Command = HeldCommand,
     });
   }
-  if (Runtime->Schedule.IsEmpty() || Runtime->Schedule[0].ApplyTick != 0) {
+  if (Runtime->Schedule.IsEmpty() || Runtime->Schedule[0].ScheduledTick != 0 ||
+      Runtime->Schedule[0].ArrivalTick != 0) {
     UE_LOG(LogUvdAircraft, Error,
            TEXT("Control schedule must begin at tick 0"));
     return false;
   }
   Runtime->Command = Runtime->Schedule[0].Command;
+  Runtime->Schedule[0].AppliedTick = 0;
   Runtime->NextScheduleIndex = 1;
 
   const TSharedPtr<FJsonObject> Stop = Root->GetObjectField(TEXT("stop"));
@@ -461,6 +739,13 @@ bool UUvdAircraftComponent::LoadRun() {
     UE_LOG(LogUvdAircraft, Error, TEXT("Run must contain at least one tick"));
     return false;
   }
+  if (Runtime->FinalTick > static_cast<uint64>(MAX_int32 - 1)) {
+    UE_LOG(LogUvdAircraft, Error,
+           TEXT("Run is too long for bounded Unreal evidence capture"));
+    return false;
+  }
+  Runtime->StateByTick.Reserve(static_cast<int32>(Runtime->FinalTick + 1));
+  Runtime->IntervalSamples.Reserve(static_cast<int32>(Runtime->FinalTick));
   return true;
 }
 
@@ -469,10 +754,17 @@ bool UUvdAircraftComponent::ConfigureBody() {
   if (!Body || !Runtime) {
     return false;
   }
-  Body->SetMassOverride(Runtime->Parameters.mass_kg, true);
+  Runtime->TargetMassKg = Runtime->ProbeKind == EUvdProbeKind::Aircraft
+                              ? Runtime->Parameters.mass_kg
+                              : 1.0;
+  Runtime->TargetInertiaBodyKgm2 = Runtime->ProbeKind == EUvdProbeKind::Aircraft
+                                       ? Runtime->Parameters.inertia_body_kgm2
+                                       : uvd::Matrix3::Identity();
+  Body->SetMassOverride(Runtime->TargetMassKg, true);
+  Body->UpdateMassProperties();
 
   const uvd::Matrix3 TargetInertia =
-      BodyInertiaToUnreal(Runtime->Parameters.inertia_body_kgm2);
+      BodyInertiaToUnreal(Runtime->TargetInertiaBodyKgm2);
   Eigen::SelfAdjointEigenSolver<uvd::Matrix3> Solver{TargetInertia};
   if (Solver.info() != Eigen::Success) {
     UE_LOG(LogUvdAircraft, Error, TEXT("Aircraft inertia eigensolve failed"));
@@ -489,14 +781,38 @@ bool UUvdAircraftComponent::ConfigureBody() {
     UE_LOG(LogUvdAircraft, Error, TEXT("Chaos produced nonpositive inertia"));
     return false;
   }
-  Body->InertiaTensorScale = {
-      TargetPrincipal.x() / CurrentInertia.X,
-      TargetPrincipal.y() / CurrentInertia.Y,
-      TargetPrincipal.z() / CurrentInertia.Z,
-  };
-  Body->UpdateMassProperties();
-  Body->SetMassSpaceLocal(
-      FTransform{ToUnrealQuaternion(PrincipalAxes), FVector::ZeroVector});
+  Body->InertiaTensorScale = FVector::OneVector;
+  const FTransform TargetMassSpace{ToUnrealQuaternion(PrincipalAxes),
+                                   FVector::ZeroVector};
+  FPhysicsCommand::ExecuteWrite(
+      Body->GetPhysicsActor(), [&](const FPhysicsActorHandle& Actor) {
+        FPhysicsInterface::SetMassSpaceInertiaTensor_AssumesLocked(
+            Actor, ToUnreal(TargetPrincipal));
+        FPhysicsInterface::SetComLocalPose_AssumesLocked(Actor,
+                                                         TargetMassSpace);
+        FPhysicsInterface::SetSleepThresholdMultiplier_AssumesLocked(Actor,
+                                                                     0.0F);
+      });
+  Body->SetInertiaConditioningEnabled(false);
+  UpdatedPrimitive->SetLinearDamping(0.0F);
+  UpdatedPrimitive->SetAngularDamping(0.0F);
+  UpdatedPrimitive->SetPhysicsMaxAngularVelocityInRadians(1000.0F);
+  UpdatedPrimitive->SetEnableGravity(Runtime->ProbeKind ==
+                                     EUvdProbeKind::Aircraft);
+
+  Runtime->ObservedMassKg = Body->GetBodyMass();
+  const FVector ObservedPrincipal = Body->GetBodyInertiaTensor();
+  const FTransform ObservedMassSpace = Body->GetMassSpaceLocal();
+  const uvd::Matrix3 ObservedAxes = RotationMatrix(ObservedMassSpace);
+  uvd::Matrix3 ObservedPrincipalMatrix = uvd::Matrix3::Zero();
+  ObservedPrincipalMatrix.diagonal() = ToUvd(ObservedPrincipal);
+  const uvd::Matrix3 ObservedUnrealInertia =
+      ObservedAxes * ObservedPrincipalMatrix * ObservedAxes.transpose();
+  const uvd::Matrix3 AxialMap = -FrdToUnrealBody;
+  Runtime->ObservedInertiaBodyKgm2 =
+      0.0001 * AxialMap.transpose() * ObservedUnrealInertia * AxialMap;
+  Runtime->ObservedComLocalM = 0.01 * FrdToUnrealBody.transpose() *
+                               ToUvd(ObservedMassSpace.GetLocation());
   return true;
 }
 
@@ -526,11 +842,74 @@ void UUvdAircraftComponent::FinishRun() {
   const bool FiniteFinalWrench = uvd::is_finite(Runtime->FinalWrench);
   const double MinimumObservedDtS =
       Runtime->StepIndex == 0 ? 0.0 : Runtime->MinObservedDtS;
+  const uint64 DroppedSteps = Runtime->FinalTick > Runtime->StepIndex
+                                  ? Runtime->FinalTick - Runtime->StepIndex
+                                  : 0;
+  const double WallDurationS =
+      Runtime->StartWallTimeS > 0.0
+          ? FPlatformTime::Seconds() - Runtime->StartWallTimeS
+          : 0.0;
+  const double SimulatedDurationS =
+      static_cast<double>(Runtime->StepIndex) * Runtime->FixedDtS;
+  const double MassErrorKg =
+      FMath::Abs(Runtime->ObservedMassKg - Runtime->TargetMassKg);
+  const double InertiaMaximumErrorKgm2 =
+      (Runtime->ObservedInertiaBodyKgm2 - Runtime->TargetInertiaBodyKgm2)
+          .cwiseAbs()
+          .maxCoeff();
+  const double ComErrorM = Runtime->ObservedComLocalM.norm();
+  const bool BodyConfigurationPassed = MassErrorKg <= 1e-4 &&
+                                       InertiaMaximumErrorKgm2 <= 1e-4 &&
+                                       ComErrorM <= 1e-6;
+  double MechanicsResponseError = 0.0;
+  if (Runtime->ProbeKind == EUvdProbeKind::UnitForce) {
+    MechanicsResponseError = ((Runtime->FinalState.velocity_body_mps -
+                               Runtime->InitialState.velocity_body_mps) -
+                              uvd::Vector3{SimulatedDurationS, 0.0, 0.0})
+                                 .norm();
+  } else if (Runtime->ProbeKind == EUvdProbeKind::UnitTorque) {
+    MechanicsResponseError = ((Runtime->FinalState.omega_body_radps -
+                               Runtime->InitialState.omega_body_radps) -
+                              uvd::Vector3{SimulatedDurationS, 0.0, 0.0})
+                                 .norm();
+  }
+  const bool MechanicsResponsePassed = MechanicsResponseError <= 2e-3;
+  bool AllCommandsApplied = true;
+  for (const FUvdScheduledCommand& Update : Runtime->Schedule) {
+    if (Update.ArrivalTick < Runtime->FinalTick &&
+        Update.AppliedTick == std::numeric_limits<uint64>::max()) {
+      AllCommandsApplied = false;
+    }
+  }
+  const bool CommandAccountingPassed =
+      AllCommandsApplied &&
+      Runtime->CommandIntervalRecords == Runtime->StepIndex;
+  const uint64 PhysicsStepsDuringHitch =
+      Runtime->HitchEndStep >= Runtime->HitchStartStep
+          ? Runtime->HitchEndStep - Runtime->HitchStartStep
+          : 0;
+  const bool HitchPassed =
+      !Runtime->HitchConfigured ||
+      (Runtime->HitchInjected && PhysicsStepsDuringHitch > 0);
+  const bool EvidenceComplete =
+      Runtime->ProbeKind != EUvdProbeKind::Aircraft ||
+      (Runtime->IntervalSamples.Num() ==
+           static_cast<int32>(Runtime->StepIndex) &&
+       Runtime->StateByTick.Num() ==
+           static_cast<int32>(Runtime->StepIndex + 1));
+  const bool EvidenceFilesWritten =
+      BundlePath.IsEmpty() || SaveAircraftEvidence(BundlePath, *Runtime);
   const bool Passed =
       FailureCode == 0 && Runtime->StepIndex == Runtime->FinalTick &&
       FiniteFinalState && FiniteFinalWrench &&
       FMath::Abs(MinimumObservedDtS - Runtime->FixedDtS) <= 1e-6 &&
-      FMath::Abs(Runtime->MaxObservedDtS - Runtime->FixedDtS) <= 1e-6;
+      FMath::Abs(Runtime->MaxObservedDtS - Runtime->FixedDtS) <= 1e-6 &&
+      BodyConfigurationPassed && MechanicsResponsePassed &&
+      CommandAccountingPassed && HitchPassed && EvidenceComplete &&
+      EvidenceFilesWritten;
+  const FString StopReason = FailureCode != 0 ? FailureReason(FailureCode)
+                             : Passed         ? TEXT("completed")
+                                              : TEXT("acceptance_failure");
 
   TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
   Metrics->SetNumberField(TEXT("requested_steps"),
@@ -539,11 +918,96 @@ void UUvdAircraftComponent::FinishRun() {
                           static_cast<double>(Runtime->StepIndex));
   Metrics->SetNumberField(TEXT("wrench_applications"),
                           static_cast<double>(Runtime->StepIndex));
+  Metrics->SetNumberField(TEXT("command_interval_records"),
+                          static_cast<double>(Runtime->CommandIntervalRecords));
+  Metrics->SetNumberField(TEXT("dropped_steps"),
+                          static_cast<double>(DroppedSteps));
+  Metrics->SetNumberField(
+      TEXT("held_due_to_delay_intervals"),
+      static_cast<double>(Runtime->HeldDueToDelayIntervals));
+  Metrics->SetNumberField(TEXT("late_command_updates"),
+                          static_cast<double>(Runtime->LateCommandUpdates));
   Metrics->SetNumberField(TEXT("minimum_observed_dt_s"), MinimumObservedDtS);
   Metrics->SetNumberField(TEXT("maximum_observed_dt_s"),
                           Runtime->MaxObservedDtS);
   Metrics->SetBoolField(TEXT("finite_final_state"), FiniteFinalState);
   Metrics->SetBoolField(TEXT("finite_final_wrench"), FiniteFinalWrench);
+  Metrics->SetNumberField(TEXT("simulated_duration_s"), SimulatedDurationS);
+  Metrics->SetNumberField(TEXT("wall_duration_s"), WallDurationS);
+  Metrics->SetNumberField(
+      TEXT("real_time_factor"),
+      WallDurationS > 0.0 ? SimulatedDurationS / WallDurationS : 0.0);
+  Metrics->SetNumberField(TEXT("render_frames"),
+                          static_cast<double>(Runtime->RenderFrames));
+  Metrics->SetNumberField(
+      TEXT("observed_render_rate_hz"),
+      WallDurationS > 0.0
+          ? static_cast<double>(Runtime->RenderFrames) / WallDurationS
+          : 0.0);
+  Metrics->SetNumberField(
+      TEXT("mean_callback_duration_s"),
+      Runtime->StepIndex > 0
+          ? Runtime->CallbackTotalS / static_cast<double>(Runtime->StepIndex)
+          : 0.0);
+  Metrics->SetNumberField(TEXT("maximum_callback_duration_s"),
+                          Runtime->CallbackMaximumS);
+  Metrics->SetNumberField(TEXT("physics_steps_during_render_hitch"),
+                          static_cast<double>(PhysicsStepsDuringHitch));
+  Metrics->SetNumberField(
+      TEXT("physics_steps_while_game_thread_slept"),
+      static_cast<double>(Runtime->HitchWakeStep - Runtime->HitchStartStep));
+  Metrics->SetBoolField(TEXT("body_configuration_passed"),
+                        BodyConfigurationPassed);
+  Metrics->SetBoolField(TEXT("mechanics_response_passed"),
+                        MechanicsResponsePassed);
+  Metrics->SetBoolField(TEXT("command_accounting_passed"),
+                        CommandAccountingPassed);
+  Metrics->SetBoolField(TEXT("render_hitch_passed"), HitchPassed);
+  Metrics->SetBoolField(TEXT("evidence_complete"), EvidenceComplete);
+  Metrics->SetBoolField(TEXT("evidence_files_written"), EvidenceFilesWritten);
+
+  TSharedPtr<FJsonObject> BodyConfiguration = MakeShared<FJsonObject>();
+  BodyConfiguration->SetNumberField(TEXT("target_mass_kg"),
+                                    Runtime->TargetMassKg);
+  BodyConfiguration->SetNumberField(TEXT("observed_mass_kg"),
+                                    Runtime->ObservedMassKg);
+  BodyConfiguration->SetNumberField(TEXT("mass_error_kg"), MassErrorKg);
+  BodyConfiguration->SetArrayField(TEXT("target_inertia_body_kgm2"),
+                                   JsonMatrix(Runtime->TargetInertiaBodyKgm2));
+  BodyConfiguration->SetArrayField(
+      TEXT("observed_inertia_body_kgm2"),
+      JsonMatrix(Runtime->ObservedInertiaBodyKgm2));
+  BodyConfiguration->SetNumberField(TEXT("maximum_inertia_error_kgm2"),
+                                    InertiaMaximumErrorKgm2);
+  BodyConfiguration->SetArrayField(TEXT("observed_com_local_m"),
+                                   JsonVector(Runtime->ObservedComLocalM));
+  BodyConfiguration->SetNumberField(TEXT("com_error_m"), ComErrorM);
+
+  TArray<TSharedPtr<FJsonValue>> CommandUpdates;
+  for (const FUvdScheduledCommand& Update : Runtime->Schedule) {
+    TSharedPtr<FJsonObject> Item = MakeShared<FJsonObject>();
+    Item->SetNumberField(TEXT("scheduled_tick"),
+                         static_cast<double>(Update.ScheduledTick));
+    Item->SetNumberField(TEXT("arrival_tick"),
+                         static_cast<double>(Update.ArrivalTick));
+    if (Update.AppliedTick != std::numeric_limits<uint64>::max()) {
+      Item->SetNumberField(TEXT("applied_tick"),
+                           static_cast<double>(Update.AppliedTick));
+    }
+    CommandUpdates.Add(MakeShared<FJsonValueObject>(Item));
+  }
+
+  TSharedPtr<FJsonObject> Probe = MakeShared<FJsonObject>();
+  Probe->SetStringField(TEXT("kind"), ProbeKindName(Runtime->ProbeKind));
+  Probe->SetNumberField(TEXT("requested_render_rate_hz"),
+                        Runtime->RenderRateHz);
+  Probe->SetBoolField(TEXT("render_hitch_configured"),
+                      Runtime->HitchConfigured);
+  Probe->SetBoolField(TEXT("render_hitch_injected"), Runtime->HitchInjected);
+  Probe->SetNumberField(TEXT("mechanics_response_error"),
+                        MechanicsResponseError);
+  Probe->SetObjectField(TEXT("body_configuration"), BodyConfiguration);
+  Probe->SetArrayField(TEXT("command_updates"), CommandUpdates);
 
   TSharedPtr<FJsonObject> Wrench = MakeShared<FJsonObject>();
   Wrench->SetArrayField(TEXT("force_body_N"),
@@ -554,7 +1018,7 @@ void UUvdAircraftComponent::FinishRun() {
   TSharedPtr<FJsonObject> Report = MakeShared<FJsonObject>();
   Report->SetNumberField(TEXT("schema_version"), 1);
   Report->SetBoolField(TEXT("passed"), Passed);
-  Report->SetStringField(TEXT("stop_reason"), FailureReason(FailureCode));
+  Report->SetStringField(TEXT("stop_reason"), StopReason);
   Report->SetStringField(TEXT("unreal_engine_version"),
                          FEngineVersion::Current().ToString());
   Report->SetStringField(TEXT("operating_system"),
@@ -564,6 +1028,7 @@ void UUvdAircraftComponent::FinishRun() {
   Report->SetObjectField(TEXT("final_state"), JsonState(Runtime->FinalState));
   Report->SetObjectField(TEXT("final_wrench"), Wrench);
   Report->SetObjectField(TEXT("metrics"), Metrics);
+  Report->SetObjectField(TEXT("probe"), Probe);
 
   if (!BundlePath.IsEmpty()) {
     const FString ResultsDirectory =
@@ -587,12 +1052,13 @@ void UUvdAircraftComponent::FinishRun() {
     }
     Manifest->SetStringField(TEXT("status"),
                              Passed ? TEXT("complete") : TEXT("failed"));
-    Manifest->SetStringField(TEXT("stop_reason"), FailureReason(FailureCode));
+    Manifest->SetStringField(TEXT("stop_reason"), StopReason);
     Manifest->SetStringField(TEXT("unreal_engine_version"),
                              FEngineVersion::Current().ToString());
     Manifest->SetNumberField(TEXT("final_state_tick"),
                              static_cast<double>(Runtime->StepIndex));
     Manifest->SetObjectField(TEXT("metrics"), Metrics);
+    Manifest->SetObjectField(TEXT("probe"), Probe);
     if (!SaveJson(ManifestPath, Manifest)) {
       UE_LOG(LogUvdAircraft, Error, TEXT("Could not update manifest: %s"),
              *ManifestPath);
@@ -634,47 +1100,90 @@ void UUvdAircraftComponent::AsyncPhysicsTickComponent(float DeltaTime,
   const uvd::RigidBodyState State = UnrealBodyStateToCore(
       ToUvd(Transform.GetLocation()), RotationMatrix(Transform),
       ToUvd(FVector{Body->V()}), ToUvd(FVector{Body->W()}));
+  if (Runtime->ProbeKind == EUvdProbeKind::Aircraft &&
+      Runtime->StateByTick.Num() == static_cast<int32>(Runtime->StepIndex)) {
+    Runtime->StateByTick.Add(State);
+  }
   if (Runtime->StepIndex >= Runtime->FinalTick) {
     Runtime->FinalState = State;
     Runtime->Finished.store(true, std::memory_order_release);
     return;
   }
 
+  const double CallbackStartS = FPlatformTime::Seconds();
+  bool HeldDueToDelay = false;
+  if (Runtime->NextScheduleIndex < Runtime->Schedule.Num()) {
+    const FUvdScheduledCommand& Pending =
+        Runtime->Schedule[Runtime->NextScheduleIndex];
+    HeldDueToDelay = Pending.ScheduledTick <= Runtime->StepIndex &&
+                     Pending.ArrivalTick > Runtime->StepIndex;
+  }
+  if (HeldDueToDelay) {
+    ++Runtime->HeldDueToDelayIntervals;
+  }
   while (Runtime->NextScheduleIndex < Runtime->Schedule.Num() &&
-         Runtime->Schedule[Runtime->NextScheduleIndex].ApplyTick ==
+         Runtime->Schedule[Runtime->NextScheduleIndex].ArrivalTick <=
              Runtime->StepIndex) {
-    Runtime->Command = Runtime->Schedule[Runtime->NextScheduleIndex].Command;
+    FUvdScheduledCommand& Update =
+        Runtime->Schedule[Runtime->NextScheduleIndex];
+    Runtime->Command = Update.Command;
+    Update.AppliedTick = Runtime->StepIndex;
+    if (Update.AppliedTick > Update.ScheduledTick) {
+      ++Runtime->LateCommandUpdates;
+    }
     ++Runtime->NextScheduleIndex;
   }
-  const uvd::Vector3 Wind{WindNedMps.X, WindNedMps.Y, WindNedMps.Z};
-  const uvd::AtmosphereSnapshot Atmosphere =
-      uvd::evaluate_isa(OriginAltitudeMslM - State.position_ned_m.z(), Wind);
-  const uvd::AircraftEffectorState Effectors =
-      uvd::map_command(Runtime->Command, Runtime->Parameters.actuator);
-  const uvd::AircraftModelOutput Model = uvd::evaluate_aerosonde(
-      State, Effectors, Atmosphere, Runtime->Parameters);
-  if (!Model.valid) {
-    UE_LOG(LogUvdAircraft, Error,
-           TEXT("Aircraft model became invalid at step %llu"),
-           Runtime->StepIndex);
-    Runtime->FinalState = State;
-    Runtime->FailureCode.store(1);
-    Runtime->Finished.store(true, std::memory_order_release);
-    return;
+  uvd::BodyWrench AppliedWrench;
+  if (Runtime->ProbeKind == EUvdProbeKind::Aircraft) {
+    const uvd::Vector3 Wind{WindNedMps.X, WindNedMps.Y, WindNedMps.Z};
+    const uvd::AtmosphereSnapshot Atmosphere =
+        uvd::evaluate_isa(OriginAltitudeMslM - State.position_ned_m.z(), Wind);
+    const uvd::AircraftEffectorState Effectors =
+        uvd::map_command(Runtime->Command, Runtime->Parameters.actuator);
+    const uvd::AircraftModelOutput Model = uvd::evaluate_aerosonde(
+        State, Effectors, Atmosphere, Runtime->Parameters);
+    if (!Model.valid) {
+      UE_LOG(LogUvdAircraft, Error,
+             TEXT("Aircraft model became invalid at step %llu"),
+             Runtime->StepIndex);
+      Runtime->FinalState = State;
+      Runtime->FailureCode.store(1);
+      Runtime->Finished.store(true, std::memory_order_release);
+      return;
+    }
+    AppliedWrench = Model.total_wrench;
+    Runtime->IntervalSamples.Add({
+        .Interval = Runtime->StepIndex,
+        .Command = Runtime->Command,
+        .Effectors = Effectors,
+        .Atmosphere = Atmosphere,
+        .Model = Model,
+    });
+  } else if (Runtime->ProbeKind == EUvdProbeKind::UnitForce) {
+    AppliedWrench.force_body_N = {1.0, 0.0, 0.0};
+  } else {
+    AppliedWrench.moment_body_Nm = {1.0, 0.0, 0.0};
   }
 
   const FVector ForceBody =
-      ToUnreal(BodyForceToUnreal(Model.total_wrench.force_body_N));
+      ToUnreal(BodyForceToUnreal(AppliedWrench.force_body_N));
   const FVector MomentBody =
-      ToUnreal(BodyMomentToUnreal(Model.total_wrench.moment_body_Nm));
+      ToUnreal(BodyMomentToUnreal(AppliedWrench.moment_body_Nm));
+  Body->SetObjectState(Chaos::EObjectStateType::Dynamic);
   Body->AddForce(Transform.TransformVectorNoScale(ForceBody));
   Body->AddTorque(Transform.TransformVectorNoScale(MomentBody));
-  Runtime->FinalWrench = Model.total_wrench;
+  Runtime->FinalWrench = AppliedWrench;
   Runtime->MinObservedDtS =
       FMath::Min(Runtime->MinObservedDtS, static_cast<double>(DeltaTime));
   Runtime->MaxObservedDtS =
       FMath::Max(Runtime->MaxObservedDtS, static_cast<double>(DeltaTime));
+  ++Runtime->CommandIntervalRecords;
   ++Runtime->StepIndex;
+  Runtime->CompletedSteps.store(Runtime->StepIndex, std::memory_order_release);
+  const double CallbackDurationS = FPlatformTime::Seconds() - CallbackStartS;
+  Runtime->CallbackTotalS += CallbackDurationS;
+  Runtime->CallbackMaximumS =
+      FMath::Max(Runtime->CallbackMaximumS, CallbackDurationS);
 }
 
 // UnrealBuildTool cannot compile sources outside a module directly. Compile

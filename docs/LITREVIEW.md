@@ -71,7 +71,7 @@ turn a roadmap into an accidental claim.
 | Unit/sign checks and low-speed/high-angle finite sweep | Implemented | Code verification, not physical validation |
 | Aero-only JSBSim comparison fixture | Implemented | Detects equation, frame, sign, unit, and scaling errors; the fixture mirrors the same equations |
 | Physical Aerosonde validation | Not implemented | No claim of real-aircraft fidelity is yet supported |
-| Unreal/Chaos open-loop runtime | Smoke run implemented | Shared wrench path executes at fixed rate; G0/U0-U1 acceptance remains |
+| Unreal/Chaos open-loop runtime | Smoke and local U0/U1 suites implemented | Mechanics/timing, matched-state wrench, and trajectory-refinement probes pass locally; G0 and cross-platform evidence remain |
 | Cesium runtime | Not implemented | Geospatial placement remains G0 work |
 | ArduPlane JSON/UDP closed loop | Not implemented | Currently a documented design |
 | PX4 adapter | Not implemented | A research opportunity, not current capability |

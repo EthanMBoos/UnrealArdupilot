@@ -8,11 +8,21 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Modules/ModuleManager.h"
+#include "PhysicsEngine/PhysicsSettings.h"
 #include "UvdAircraftComponent.h"
 
 class FUnrealVehicleDynamicsModule final : public IModuleInterface {
  public:
   void StartupModule() override {
+    double FixedDtS = 0.0;
+    if (FParse::Value(FCommandLine::Get(), TEXT("UvdFixedDt="), FixedDtS) &&
+        FMath::IsFinite(FixedDtS) && FixedDtS > 0.0) {
+      UPhysicsSettings* Settings = UPhysicsSettings::Get();
+      Settings->bTickPhysicsAsync = true;
+      Settings->AsyncFixedTimeStepSize = static_cast<float>(FixedDtS);
+      Settings->bSubstepping = false;
+      Settings->bSubsteppingAsync = false;
+    }
     WorldDelegate = FWorldDelegates::OnPostWorldInitialization.AddRaw(
         this, &FUnrealVehicleDynamicsModule::OnWorldInitialized);
   }

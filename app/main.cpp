@@ -34,6 +34,12 @@ std::optional<fs::path> optional_path(const std::string& value) {
   return fs::path(value);
 }
 
+std::string precise_number(double value) {
+  std::ostringstream stream;
+  stream << std::setprecision(17) << value;
+  return stream.str();
+}
+
 pid_t spawn_process(const std::vector<std::string>& arguments,
                     const std::optional<fs::path>& log_path = std::nullopt) {
 #if defined(__APPLE__) || defined(__linux__)
@@ -333,9 +339,10 @@ void run_unreal(const RunConfig& run,
       fs::path(UVD_SOURCE_DIR) / "unreal/UnrealVehicleDynamics.uproject";
   const fs::path unreal_log = bundle / "unreal.log";
   const pid_t unreal = spawn_process(
-      {editor.string(), project.string(), "-game", "-log",
+      {editor.string(), project.string(), "-game", "-log", "-novsync",
        "-abslog=" + unreal_log.string(), "-UvdRun=" + run.path.string(),
-       "-UvdBundle=" + bundle.string()},
+       "-UvdBundle=" + bundle.string(),
+       "-UvdFixedDt=" + precise_number(run.dt)},
       bundle / "unreal-launcher.log");
 
   int status{};
@@ -388,9 +395,10 @@ void run_sitl(const RunConfig& run,
       fs::path(UVD_SOURCE_DIR) / "unreal/UnrealVehicleDynamics.uproject";
   const fs::path unreal_log = bundle / "unreal.log";
   const pid_t unreal = spawn_process(
-      {editor.string(), project.string(), "-game", "-log",
+      {editor.string(), project.string(), "-game", "-log", "-novsync",
        "-abslog=" + unreal_log.string(), "-UvdRun=" + run.path.string(),
-       "-UvdBundle=" + bundle.string()},
+       "-UvdBundle=" + bundle.string(),
+       "-UvdFixedDt=" + precise_number(run.dt)},
       bundle / "unreal-launcher.log");
 
   const std::string container = safe_container_name(run.run_id);

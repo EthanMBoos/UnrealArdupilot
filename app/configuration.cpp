@@ -343,7 +343,7 @@ LoadedAircraft load_aircraft(const fs::path& raw_path) {
 
   const auto& aerodynamics = json.at("aerodynamics");
   auto& coefficients = parameters.aero;
-  coefficients.C_L_0 = aerodynamics.at("CL0");
+  coefficients.C_L_0 = aerodynamics.at("CL_0");
   coefficients.C_L_alpha = aerodynamics.at("CL_alpha");
   coefficients.C_L_q = aerodynamics.at("CL_q");
   coefficients.C_L_delta_e = aerodynamics.at("CL_de");
@@ -491,21 +491,40 @@ RunConfig load_run(const fs::path& raw_path) {
   }
 
   std::optional<std::uint64_t> previous_tick;
+  std::optional<std::uint64_t> previous_arrival_tick;
   for (const auto& item : controls.at("schedule")) {
+    const std::uint64_t apply_tick = item.at("apply_tick");
     ScheduleEntry entry{
-        .tick = item.at("apply_tick"),
+        .tick = apply_tick,
+        .arrival_tick = item.value("arrival_tick", apply_tick),
         .values = scheduled_input_from_json(item.at("values")),
     };
     if (previous_tick && entry.tick <= *previous_tick) {
       throw std::runtime_error("schedule ticks must be strictly increasing");
     }
     previous_tick = entry.tick;
+    if (entry.arrival_tick < entry.tick) {
+      throw std::runtime_error("schedule arrival_tick precedes apply_tick");
+    }
+    if (previous_arrival_tick && entry.arrival_tick <= *previous_arrival_tick) {
+      throw std::runtime_error(
+          "schedule arrival ticks must be strictly increasing");
+    }
+    previous_arrival_tick = entry.arrival_tick;
     if (item.contains("time_s") &&
         std::abs(item.at("time_s").get<double>() -
                  static_cast<double>(entry.tick) * run.dt) > 1e-12) {
       throw std::runtime_error("schedule time_s is off the fixed tick grid");
     }
     run.schedule.push_back(std::move(entry));
+  }
+  if (run.frontend == Frontend::kHeadless) {
+    for (const ScheduleEntry& entry : run.schedule) {
+      if (entry.arrival_tick != entry.tick) {
+        throw std::runtime_error(
+            "schedule arrival_tick is only supported by Unreal runs");
+      }
+    }
   }
   if (run.schedule.front().tick != 0 ||
       !run.schedule.front().values.complete()) {

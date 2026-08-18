@@ -12,7 +12,7 @@
   "inertia_kgm2": {"jx": 0.8244, "jy": 1.135, "jz": 1.759, "jxz": 0.1204},
   "geometry": {"wing_area_m2": 0.55, "span_m": 2.8956, "chord_m": 0.18994, "oswald_efficiency": 0.9, "aspect_ratio": 15.244544290909088},
   "aerodynamics": {
-    "CL0": 0.23, "CL_alpha": 5.61, "CL_q": 7.95, "CL_de": 0.13,
+    "CL_0": 0.23, "CL_alpha": 5.61, "CL_q": 7.95, "CL_de": 0.13,
     "CD_p": 0.043, "CD_q": 0.0, "CD_de": 0.0135,
     "CY0": 0.0, "CY_beta": -0.98, "CY_p": 0.0, "CY_r": 0.0, "CY_da": 0.075, "CY_dr": 0.19,
     "Cl0": 0.0, "Cl_beta": -0.13, "Cl_p": -0.51, "Cl_r": 0.25, "Cl_da": 0.17, "Cl_dr": 0.0024,

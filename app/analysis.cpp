@@ -629,8 +629,9 @@ void run_model_probe(const fs::path& aircraft_path) {
       atmosphere.density_kgpm3 = input.at("density_kgpm3");
     }
 
-    const AerodynamicsOutput aerodynamics = evaluate_aerodynamics(
-        state, effectors, atmosphere, aircraft.parameters);
+    const AircraftModelOutput model =
+        evaluate_aerosonde(state, effectors, atmosphere, aircraft.parameters);
+    const AerodynamicsOutput& aerodynamics = model.aerodynamics;
     const AirData& air_data = aerodynamics.air_data;
     Json coefficients = Json::array();
     if (air_data.dynamic_pressure_Pa > 0.0) {
@@ -645,7 +646,9 @@ void run_model_probe(const fs::path& aircraft_path) {
           {"qbar_pa", air_data.dynamic_pressure_Pa}}},
         {"coefficients", coefficients},
         {"force_n", to_json(aerodynamics.wrench.force_body_N)},
-        {"moment_nm", to_json(aerodynamics.wrench.moment_body_Nm)}};
+        {"moment_nm", to_json(aerodynamics.wrench.moment_body_Nm)},
+        {"total_force_n", to_json(model.total_wrench.force_body_N)},
+        {"total_moment_nm", to_json(model.total_wrench.moment_body_Nm)}};
     std::cout << output.dump() << '\n';
   }
 }

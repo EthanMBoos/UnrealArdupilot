@@ -71,6 +71,30 @@ def exercise_bad_inputs(uvd, root, run_config, unreal_config, aircraft_config):
         [uvd, "validate", path], expect_success=False
     ).returncode
 
+    bad_run = json.loads(json.dumps(unreal_config))
+    bad_run["controls"]["schedule"].append(
+        {
+            "apply_tick": 1,
+            "arrival_tick": 0,
+            "values": {"elevator": -0.07},
+        }
+    )
+    path = root / "early-arrival.json"
+    write_json(path, bad_run)
+    failures["arrival_precedes_application"] = run(
+        [uvd, "validate", path], expect_success=False
+    ).returncode
+
+    bad_run = json.loads(json.dumps(run_config))
+    bad_run["controls"]["schedule"][1]["arrival_tick"] = (
+        bad_run["controls"]["schedule"][1]["apply_tick"] + 1
+    )
+    path = root / "headless-arrival.json"
+    write_json(path, bad_run)
+    failures["headless_arrival_delay"] = run(
+        [uvd, "validate", path], expect_success=False
+    ).returncode
+
     bad_run = json.loads(json.dumps(run_config))
     bad_run["controls"]["schedule"][0]["values"]["throttle"] = 2.0
     path = root / "control-limit.json"
@@ -108,6 +132,7 @@ def main():
     source_aircraft_path = ROOT / "examples" / "aircraft" / "aerosonde.json"
     source_unreal_path = ROOT / "examples" / "runs" / "unreal_ardupilot.json"
     source_unreal_smoke_path = ROOT / "examples" / "runs" / "unreal_smoke.json"
+    source_unreal_u0_path = ROOT / "examples" / "runs" / "unreal_u0.json"
     source_run = json.loads(source_run_path.read_text())
     source_unreal = json.loads(source_unreal_path.read_text())
     source_aircraft = json.loads(source_aircraft_path.read_text())
@@ -125,6 +150,7 @@ def main():
         run([uvd, "validate", aircraft_path])
         run([uvd, "validate", run_path])
         run([uvd, "validate", source_unreal_smoke_path])
+        run([uvd, "validate", source_unreal_u0_path])
         run([uvd, "trim", run_path, "--output", root / "trim"])
         run([uvd, "linearize", run_path, "--output", root / "linear"])
         run([uvd, "simulate", run_path, "--output", root / "simulation"])

@@ -95,11 +95,15 @@ Chaos smoke case:
 ```bash
 build/uvd unreal examples/runs/unreal_smoke.json --preflight
 build/uvd unreal examples/runs/unreal_smoke.json
+python3 verification/unreal_u0.py --uvd build/uvd
+python3 verification/unreal_u1.py --uvd build/uvd
 ```
 
 The smoke command opens a visible air-started aircraft, runs scripted controls
 for six simulated seconds, exits automatically, and saves an Unreal report and
-engine log in its run bundle.
+engine log in its run bundle. The U0 command repeats the full Open World launch
+for the mechanics and timing matrix; requested render caps and achieved frame
+rates are both saved because the full scene may be GPU-limited below a cap.
 
 Runs are written under `runs/` by default. Useful follow-up commands are:
 
@@ -120,11 +124,12 @@ examples/   aircraft parameters, run configuration, and input schedules
 docs/       aircraft, Unreal, water, and C++ design details
 ```
 
-The headless fixed-wing path and a finite UE 5.8/Chaos open-loop smoke run are
-implemented. The ArduPlane container and live transport probe also work
-independently, but Unreal-side UDP, Cesium placement, cross-backend comparison,
-and the G0/U0-U3 acceptance runs remain before the project is a proven v1. See
-[V1.md](docs/V1.md) for the exact evidence gate.
+The headless fixed-wing path, finite UE 5.8/Chaos open-loop smoke run, and local
+U0 mechanics/timing and U1 model/trajectory suites are implemented. The
+ArduPlane container and live transport probe also work independently, but
+Unreal-side UDP, Cesium placement, U2-U3, and the Linux acceptance repeat remain
+before the project is a proven v1. See [V1.md](docs/V1.md) for the exact evidence
+gate.
 
 ## License
 

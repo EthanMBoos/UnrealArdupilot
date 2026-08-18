@@ -35,7 +35,7 @@
     },
     "aerodynamics": {
       "type":"object", "additionalProperties":{"type":"number"},
-      "required":["CL0","CL_alpha","CL_q","CL_de","CD_p","CD_q","CD_de","CY0","CY_beta","CY_p","CY_r","CY_da","CY_dr","Cl0","Cl_beta","Cl_p","Cl_r","Cl_da","Cl_dr","Cm0","Cm_alpha","Cm_q","Cm_de","Cn0","Cn_beta","Cn_p","Cn_r","Cn_da","Cn_dr","alpha0_rad","lift_blend_M"]
+      "required":["CL_0","CL_alpha","CL_q","CL_de","CD_p","CD_q","CD_de","CY0","CY_beta","CY_p","CY_r","CY_da","CY_dr","Cl0","Cl_beta","Cl_p","Cl_r","Cl_da","Cl_dr","Cm0","Cm_alpha","Cm_q","Cm_de","Cn0","Cn_beta","Cn_p","Cn_r","Cn_da","Cn_dr","alpha0_rad","lift_blend_M"]
     },
     "propeller": {
       "type":"object", "additionalProperties":false,

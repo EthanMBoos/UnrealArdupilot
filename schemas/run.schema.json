@@ -51,6 +51,7 @@
             "required": ["apply_tick", "values"],
             "properties": {
               "apply_tick": {"type": "integer", "minimum": 0},
+              "arrival_tick": {"type": "integer", "minimum": 0},
               "time_s": {"type": "number", "minimum": 0},
               "values": {"type": "object", "additionalProperties": false, "properties": {"aileron": {"type": "number"}, "elevator": {"type": "number"}, "rudder": {"type": "number"}, "throttle": {"type": "number"}}}
             }
@@ -61,6 +62,24 @@
     },
     "stop": {"type": "object", "additionalProperties": false, "properties": {"duration_s": {"type": "number", "exclusiveMinimum": 0}, "final_tick": {"type": "integer", "minimum": 1}}, "oneOf": [{"required": ["duration_s"]}, {"required": ["final_tick"]}]},
     "controller": {"$ref": "#/$defs/controller"},
+    "unreal_probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "render_rate_hz"],
+      "properties": {
+        "kind": {"enum": ["aircraft", "unit_force", "unit_torque"]},
+        "render_rate_hz": {"type": "number", "minimum": 1, "maximum": 1000},
+        "render_hitch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["at_tick", "duration_s"],
+          "properties": {
+            "at_tick": {"type": "integer", "minimum": 0},
+            "duration_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 5}
+          }
+        }
+      }
+    },
     "tolerances": {"type": "object", "additionalProperties": true},
     "output_root": {"type": "string"}
   },
@@ -69,7 +88,10 @@
       "if": {"properties": {"frontend": {"const": "headless"}}},
       "then": {
         "properties": {"clock": {"properties": {"motion_solver": {"const": "rk4"}}}},
-        "not": {"required": ["controller"]}
+        "allOf": [
+          {"not": {"required": ["controller"]}},
+          {"not": {"required": ["unreal_probe"]}}
+        ]
       }
     },
     {
