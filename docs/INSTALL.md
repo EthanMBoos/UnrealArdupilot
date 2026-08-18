@@ -58,6 +58,7 @@ build/uvd unreal examples/runs/unreal_smoke.json --preflight
 build/uvd unreal examples/runs/unreal_smoke.json
 python3 verification/unreal_u0.py --uvd build/uvd
 python3 verification/unreal_u1.py --uvd build/uvd
+python3 verification/unreal_u2.py --uvd build/uvd
 ```
 
 The command opens a simple aircraft and chase camera, applies scripted controls through Chaos at
@@ -66,8 +67,9 @@ and `unreal.log` into the reported bundle. The U0 suite launches the same full O
 for its 60/120/240 Hz physics matrix, requested 30/60/144 Hz render caps, render hitch, delayed
 command, and unit-mechanics cases. It records achieved render rate separately because the full scene
 can be GPU-limited below the requested cap. U1 launches three more full-world cases to compare the
-same per-tick wrench calculation and timestep-refined Chaos trajectory with headless RK4. Cesium and
-Docker are not required for these tests.
+same per-tick wrench calculation and timestep-refined Chaos trajectory with headless RK4. U2 launches
+five full-world cases with a local UDP probe and verifies duplicate, gap, stale, malformed, and timeout
+behavior in the real plugin. Cesium and Docker are not required for these tests.
 
 ## Cesium and ArduPlane setup
 

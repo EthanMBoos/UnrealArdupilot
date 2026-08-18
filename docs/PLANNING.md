@@ -384,7 +384,7 @@ ticks and signal IDs. A different clock needs an explicit resampling rule.
 | G0 | [Cesium groundwork](UNREAL.md) | not yet accepted |
 | U0 | Unreal mechanics and pacing probe | full local macOS suite passes; Linux repeat remains for release evidence |
 | U1 | aircraft in Unreal | matched-state wrench and timestep-refinement suite passes locally; Linux repeat remains |
-| U2 | full Chaos and UDP exchange | live 240-frame Unreal/ArduPlane exchange passes locally; explicit fault injection remains |
+| U2 | full Chaos and UDP exchange | live 240-frame Unreal/ArduPlane exchange and five-case local fault suite pass; Linux repeat remains |
 | U3 | ArduPilot closed loop | pinned container and launcher pass independently; closed loop remains |
 
 The end-to-end example is:

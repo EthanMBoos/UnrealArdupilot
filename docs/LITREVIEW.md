@@ -73,7 +73,7 @@ turn a roadmap into an accidental claim.
 | Physical Aerosonde validation | Not implemented | No claim of real-aircraft fidelity is yet supported |
 | Unreal/Chaos open-loop runtime | Smoke and local U0/U1 suites implemented | Mechanics/timing, matched-state wrench, and trajectory-refinement probes pass locally; G0 and cross-platform evidence remain |
 | Cesium runtime | Not implemented | Geospatial placement remains G0 work |
-| ArduPlane JSON/UDP transport | Live local transport implemented | Consecutive lockstep PWM/state exchange works; readiness, arming, and closed-loop acceptance remain |
+| ArduPlane JSON/UDP transport | Live local transport and fault suite implemented | Consecutive lockstep PWM/state exchange and explicit duplicate/gap/stale/malformed/timeout handling work; readiness, arming, and closed-loop acceptance remain |
 | PX4 adapter | Not implemented | A research opportunity, not current capability |
 | Sensor errors, actuator dynamics, HIL, or flight data | Not implemented | Required for stronger closed-loop and sim-to-real claims |
 

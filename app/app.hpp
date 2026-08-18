@@ -142,7 +142,7 @@ void run_replay(const std::filesystem::path& bundle_path);
 void run_model_probe(const std::filesystem::path& aircraft_path);
 void run_unreal(const RunConfig& run,
                 const std::optional<std::filesystem::path>& output,
-                bool preflight_only);
+                bool preflight_only, bool transport_probe);
 void run_sitl(const RunConfig& run,
               const std::optional<std::filesystem::path>& output,
               bool preflight_only);

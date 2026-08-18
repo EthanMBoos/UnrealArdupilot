@@ -312,13 +312,17 @@ namespace uvd::app {
 
 void run_unreal(const RunConfig& run,
                 const std::optional<std::filesystem::path>& output,
-                bool preflight_only) {
+                bool preflight_only, bool transport_probe) {
   if (run.frontend != Frontend::kUnreal) {
     throw std::runtime_error("uvd unreal requires frontend 'unreal'");
   }
-  if (run.controller) {
+  if (run.controller && !transport_probe) {
     throw std::runtime_error(
         "uvd unreal is scripted open loop; use uvd sitl for controller runs");
+  }
+  if (transport_probe && !run.controller) {
+    throw std::runtime_error(
+        "uvd unreal --transport-probe requires a controller configuration");
   }
 
   const fs::path editor = unreal_preflight(false);
@@ -475,6 +479,7 @@ int main(int argc, char** argv) {
   std::string unreal_output;
   std::string sitl_output;
   bool unreal_preflight_only = false;
+  bool unreal_transport_probe = false;
   bool sitl_preflight = false;
 
   auto* validate =
@@ -511,6 +516,9 @@ int main(int argc, char** argv) {
   unreal->add_option("--output", unreal_output);
   unreal->add_flag("--preflight", unreal_preflight_only,
                    "Check Unreal host prerequisites without starting a run");
+  unreal->add_flag(
+      "--transport-probe", unreal_transport_probe,
+      "Allow a local UDP controller probe without starting ArduPlane");
 
   auto* sitl = app.add_subcommand(
       "sitl", "Run Unreal with one managed ArduPlane controller");
@@ -545,7 +553,8 @@ int main(int argc, char** argv) {
       uvd::app::run_replay(replay_path);
     } else if (*unreal) {
       uvd::app::run_unreal(uvd::app::load_run(unreal_path),
-                           optional_path(unreal_output), unreal_preflight_only);
+                           optional_path(unreal_output), unreal_preflight_only,
+                           unreal_transport_probe);
     } else if (*sitl) {
       uvd::app::run_sitl(uvd::app::load_run(sitl_path),
                          optional_path(sitl_output), sitl_preflight);
