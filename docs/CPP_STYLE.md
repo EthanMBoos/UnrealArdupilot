@@ -69,7 +69,7 @@ Conversions that expose coefficients must name their ordering and have a convent
 
 Per-tick model functions are deterministic, `noexcept`, and free of I/O, locks, random calls, wall
 clock access, and dynamic-size linear algebra. Configuration and CLI code may allocate and throw.
-Unreal types stop at the adapter; the core uses SI and NED/FRD throughout.
+Unreal types stop in the Unreal component; the core uses SI and NED/FRD throughout.
 
 ## Formatting and verification
 

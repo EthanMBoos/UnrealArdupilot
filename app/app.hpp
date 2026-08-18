@@ -29,6 +29,25 @@ enum class FinalAction {
   kStop,
 };
 
+enum class Frontend {
+  kHeadless,
+  kUnreal,
+};
+
+enum class MotionSolver {
+  kRk4,
+  kChaos,
+};
+
+struct ControllerConfig {
+  std::string firmware_commit;
+  std::string mode;
+  std::uint16_t udp_port{9002};
+  double startup_timeout_s{120.0};
+  double packet_timeout_s{10.0};
+  double warmup_s{10.0};
+};
+
 struct ScheduledInput {
   std::optional<double> aileron;
   std::optional<double> elevator;
@@ -54,9 +73,15 @@ struct RunConfig {
   std::filesystem::path path;
   Json json;
   std::string run_id;
+  Frontend frontend = Frontend::kHeadless;
+  MotionSolver motion_solver = MotionSolver::kRk4;
   LoadedAircraft aircraft;
   double dt{};
+  double origin_latitude_deg{};
+  double origin_longitude_deg{};
   double origin_altitude_msl_m{};
+  double starting_heading_deg{};
+  double geoid_undulation_m{};
   Vector3 wind_ned_mps = Vector3::Zero();
   RigidBodyState initial_state{};
   InputBoundary input_boundary = InputBoundary::kAircraftCommand;
@@ -66,6 +91,7 @@ struct RunConfig {
   FinalAction final_action = FinalAction::kHold;
   std::uint64_t final_tick{};
   std::filesystem::path output_root;
+  std::optional<ControllerConfig> controller;
 };
 
 struct SimulationResult {
@@ -113,5 +139,10 @@ void run_compare(const std::filesystem::path& left,
                  const std::optional<std::filesystem::path>& output);
 void run_replay(const std::filesystem::path& bundle_path);
 void run_model_probe(const std::filesystem::path& aircraft_path);
-
+void run_unreal(const RunConfig& run,
+                const std::optional<std::filesystem::path>& output,
+                bool preflight_only);
+void run_sitl(const RunConfig& run,
+              const std::optional<std::filesystem::path>& output,
+              bool preflight_only);
 }  // namespace uvd::app

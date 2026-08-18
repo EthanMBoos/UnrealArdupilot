@@ -27,8 +27,10 @@
 
 - Use the checked-in `.python-version`, `pyproject.toml`, and `uv.lock`; do not install verification
   dependencies into a global Python interpreter.
-- Create or update the local environment with `uv sync --locked` and run scripts with
-  `uv run --locked python tools/<script>.py`.
+- Create or update the local environment with `uv sync --locked`. Scientific checks live under
+  `verification/`, the live controller probe lives under `ardupilot/`, and acceptance tests live
+  under `tests/`; run them with `uv run --locked python <path>` when they use pinned Python
+  dependencies.
 - In a restricted Codex filesystem, point `UV_CACHE_DIR` at a task-specific directory under `/tmp`
   rather than writing to the user's global uv cache.
 

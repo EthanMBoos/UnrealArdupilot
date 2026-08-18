@@ -61,7 +61,7 @@ Google Scholar, and the target venue's proceedings.
 The distinction between implemented and planned work matters because a literature review can easily
 turn a roadmap into an accidental claim.
 
-| Capability | Status on 17 August 2026 | Research meaning |
+| Capability | Status on 18 August 2026 | Research meaning |
 |---|---|---|
 | C++ fixed-wing force and moment model | Implemented | Transparent reference plant, presently using educational Aerosonde parameters |
 | Six-degree-of-freedom headless rigid-body propagation | Implemented | Deterministic contact-free experiments are possible |
@@ -71,7 +71,8 @@ turn a roadmap into an accidental claim.
 | Unit/sign checks and low-speed/high-angle finite sweep | Implemented | Code verification, not physical validation |
 | Aero-only JSBSim comparison fixture | Implemented | Detects equation, frame, sign, unit, and scaling errors; the fixture mirrors the same equations |
 | Physical Aerosonde validation | Not implemented | No claim of real-aircraft fidelity is yet supported |
-| Unreal, Chaos, or Cesium runtime | Not implemented | Currently a documented design |
+| Unreal/Chaos open-loop runtime | Smoke run implemented | Shared wrench path executes at fixed rate; G0/U0-U1 acceptance remains |
+| Cesium runtime | Not implemented | Geospatial placement remains G0 work |
 | ArduPlane JSON/UDP closed loop | Not implemented | Currently a documented design |
 | PX4 adapter | Not implemented | A research opportunity, not current capability |
 | Sensor errors, actuator dynamics, HIL, or flight data | Not implemented | Required for stronger closed-loop and sim-to-real claims |

@@ -36,14 +36,13 @@ motion integrator
 ```
 
 Unreal is the main simulation runtime, not a visualizer bolted onto a separate
-solver. The shared C++ sources compile directly into the Unreal plugin. Unreal
-loads the run configuration, owns the fixed physics clock, world, actors,
-collisions, and controller connection, while the core supplies the vehicle
-math. When Chaos owns motion, the adapter gives the core a state in standard SI
-and NED/FRD coordinates on each physics tick. The core returns a body force and
-moment; the adapter applies them once and records the command, force, and
-resulting state together. Rendering reads that committed state; it never drives
-the controls calculation.
+solver. The shared C++ sources compile directly into the Unreal plugin. The
+current open-loop path loads scripted run configuration and lets Unreal own the
+fixed physics clock, world, actor, and collisions while the core supplies the
+vehicle math. When Chaos owns motion, the Unreal component gives the core a state in
+standard SI and NED/FRD coordinates on each physics tick. The core returns a
+body force and moment and the component applies it once. The closed-loop
+controller connection and full per-tick evidence stream remain v1 work.
 
 The headless CLI replaces Chaos with the core's built-in motion solver. That
 solver turns forces and moments into the next vehicle state using a standard
@@ -90,6 +89,18 @@ build/uvd trim examples/runs/headless.json
 build/uvd linearize examples/runs/headless.json
 ```
 
+With Unreal Engine 5.8 installed, compile the plugin and run the finite local
+Chaos smoke case:
+
+```bash
+build/uvd unreal examples/runs/unreal_smoke.json --preflight
+build/uvd unreal examples/runs/unreal_smoke.json
+```
+
+The smoke command opens a visible air-started aircraft, runs scripted controls
+for six simulated seconds, exits automatically, and saves an Unreal report and
+engine log in its run bundle.
+
 Runs are written under `runs/` by default. Useful follow-up commands are:
 
 ```bash
@@ -101,15 +112,19 @@ build/uvd compare <left-run> <right-run-or-model>
 
 ```text
 core/       fixed-wing equations, rigid-body dynamics, and integration
-adapters/   ArduPilot, Unreal/Chaos, and reference-data boundaries
-unreal/     Cesium world, plugin lifecycle, physics, and snapshots
-tools/      headless CLI and offline JSBSim checks
+app/        uvd executable, configuration, simulation, analysis, and SITL lifecycle
+unreal/     Unreal plugin, open-loop Chaos runtime, and smoke evidence
+ardupilot/  pinned ArduPlane container and live transport probe
+verification/ JSBSim reference comparison and numerical convergence checks
 examples/   aircraft parameters, run configuration, and input schedules
 docs/       aircraft, Unreal, water, and C++ design details
 ```
 
-The headless fixed-wing path is implemented. Unreal, Cesium, Chaos,
-ArduPilot JSON/UDP, and closed-loop integration are the next major stages.
+The headless fixed-wing path and a finite UE 5.8/Chaos open-loop smoke run are
+implemented. The ArduPlane container and live transport probe also work
+independently, but Unreal-side UDP, Cesium placement, cross-backend comparison,
+and the G0/U0-U3 acceptance runs remain before the project is a proven v1. See
+[V1.md](docs/V1.md) for the exact evidence gate.
 
 ## License
 

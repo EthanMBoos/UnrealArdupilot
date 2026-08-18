@@ -55,6 +55,34 @@ InputBoundary parse_input_boundary(std::string_view name) {
   throw std::runtime_error("unsupported controls.input_boundary");
 }
 
+Frontend parse_frontend(std::string_view name) {
+  if (name == "headless") {
+    return Frontend::kHeadless;
+  }
+  if (name == "unreal") {
+    return Frontend::kUnreal;
+  }
+  throw std::runtime_error("unsupported frontend");
+}
+
+std::string_view frontend_name(Frontend frontend) noexcept {
+  return frontend == Frontend::kHeadless ? "headless" : "unreal";
+}
+
+MotionSolver parse_motion_solver(std::string_view name) {
+  if (name == "rk4") {
+    return MotionSolver::kRk4;
+  }
+  if (name == "chaos") {
+    return MotionSolver::kChaos;
+  }
+  throw std::runtime_error("unsupported clock.motion_solver");
+}
+
+std::string_view motion_solver_name(MotionSolver solver) noexcept {
+  return solver == MotionSolver::kRk4 ? "rk4" : "chaos";
+}
+
 ScheduleMode parse_schedule_mode(std::string_view name) {
   if (name == "absolute") {
     return ScheduleMode::kAbsolute;
@@ -103,9 +131,10 @@ Json base_manifest(const RunConfig& run, std::string_view operation) {
       {"schema_version", 1},
       {"operation", operation},
       {"run_id", run.run_id},
+      {"frontend", frontend_name(run.frontend)},
       {"model_id", run.aircraft.parameters.model_id},
       {"fixed_dt_s", run.dt},
-      {"integrator", "rk4"},
+      {"motion_solver", motion_solver_name(run.motion_solver)},
       {"status", "running"},
       {"git_commit", UVD_GIT_COMMIT},
       {"git_dirty", static_cast<bool>(UVD_GIT_DIRTY)},
@@ -429,14 +458,22 @@ RunConfig load_run(const fs::path& raw_path) {
   run.json = parse_strict(run.path);
   validate_schema(run.json, source_root() / "schemas/run.schema.json");
   run.run_id = run.json.at("run_id");
+  run.frontend = parse_frontend(run.json.at("frontend").get<std::string>());
   run.dt = run.json.at("clock").at("fixed_dt_s");
+  run.motion_solver = parse_motion_solver(
+      run.json.at("clock").at("motion_solver").get<std::string>());
 
   const fs::path aircraft_path =
       run.path.parent_path() /
       run.json.at("aircraft").at("path").get<std::string>();
   run.aircraft = load_aircraft(aircraft_path);
 
-  run.origin_altitude_msl_m = run.json.at("world").at("origin_altitude_msl_m");
+  const auto& world = run.json.at("world");
+  run.origin_latitude_deg = world.at("origin_latitude_deg");
+  run.origin_longitude_deg = world.at("origin_longitude_deg");
+  run.origin_altitude_msl_m = world.at("origin_altitude_msl_m");
+  run.starting_heading_deg = world.at("starting_heading_deg");
+  run.geoid_undulation_m = world.value("geoid_undulation_m", 0.0);
   run.wind_ned_mps =
       vector3_from_json(run.json.at("atmosphere").at("wind_ned_mps"));
   run.initial_state = state_from_json(run.json.at("initial_state"));
@@ -474,6 +511,13 @@ RunConfig load_run(const fs::path& raw_path) {
       !run.schedule.front().values.complete()) {
     throw std::runtime_error("schedule tick 0 must define all four inputs");
   }
+  if (run.schedule_mode == ScheduleMode::kAbsolute) {
+    AircraftCommand held_input;
+    for (const ScheduleEntry& entry : run.schedule) {
+      entry.values.apply_to(held_input);
+      validate_input(held_input, run.input_boundary);
+    }
+  }
 
   const auto& stop = run.json.at("stop");
   if (stop.contains("final_tick")) {
@@ -488,6 +532,22 @@ RunConfig load_run(const fs::path& raw_path) {
   }
   run.output_root = run.path.parent_path() /
                     run.json.value("output_root", std::string("runs"));
+  if (run.json.contains("controller")) {
+    const auto& controller = run.json.at("controller");
+    run.controller = ControllerConfig{
+        .firmware_commit = controller.at("firmware_commit"),
+        .mode = controller.at("mode"),
+        .udp_port = controller.at("udp_port"),
+        .startup_timeout_s = controller.at("startup_timeout_s"),
+        .packet_timeout_s = controller.at("packet_timeout_s"),
+        .warmup_s = controller.at("warmup_s"),
+    };
+    const double rate_hz = 1.0 / run.dt;
+    if (std::abs(rate_hz - std::round(rate_hz)) > 1e-9) {
+      throw std::runtime_error(
+          "controller runs require an integer reciprocal physics rate");
+    }
+  }
   return run;
 }
 

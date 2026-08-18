@@ -39,7 +39,8 @@ Each run config supplies its starting LLA.
 No takeoff, landing gear, sensor noise, HIL, marine runtime, multiple vehicles, ROS, RPC, or hot
 reloading yet. A packaged app can wait.
 
-Unreal should run on Linux or macOS with UE 5.6.1 and a supported native compiler. Unreal runs on
+Unreal should run on Linux or macOS with UE 5.8 and a supported native compiler. UE 5.8.1 with
+Xcode 26.6 is the first tested macOS baseline. Unreal runs on
 the host. ArduPilot SITL runs in Docker and talks to Unreal over UDP. Both host platforms must pass
 the same coordinate, timing, force, and networking checks.
 
@@ -47,9 +48,10 @@ the same coordinate, timing, force, and networking checks.
 
 ```text
 core/       C++23 fixed-size Eigen math, aircraft equations, rigid dynamics and integrator
-adapters/   ArduPilot JSON, Unreal/Chaos and reference-data conversion
+app/        uvd executable, run configuration, analysis, simulation and orchestration
 unreal/     Cesium map and georeference, plugin lifecycle, Chaos callbacks and snapshots
-tools/      CLI and offline JSBSim checks
+ardupilot/  pinned ArduPlane container and live transport probe
+verification/ scientific reference comparisons and convergence checks
 ```
 
 `core/` has no Unreal headers, sockets, global filesystem state, or wall clock. CMake builds it on
@@ -63,8 +65,9 @@ allocate, and their dimensions are checked at compile time.
 The first version has one aircraft equation set compiled into C++. JSON holds the parameters; it
 isn't a language for inventing new models.
 
-The headless CLI is split by capability under `tools/uvd/`: `main.cpp` only declares and dispatches
-commands, while configuration, simulation, aircraft analysis, and comparison each have one cohesive
+The application is split by substantial capability under `app/`: `main.cpp` declares commands,
+dispatches them, and owns the external SITL process lifecycle, while configuration, simulation,
+aircraft analysis, and comparison each have one cohesive
 implementation file. `app.hpp` is private application wiring, not a public vehicle-model API. Add
 to an existing capability until a genuinely separate subsystem, such as SITL orchestration, earns
 its own module; do not create one file per command, class, or helper.
@@ -263,17 +266,21 @@ and physics session. A narrow host control channel lets the wrapper request `Rel
 plugin applies that request only at the next unique PWM boundary. Release requires the expected
 mode, armed state, healthy estimator, verified parameters, and stable PWM near trim.
 
-`SIM_RATE_HZ` must equal the physics rate. Test 60, 120, and 240 Hz, then keep the slowest rate that
-meets convergence, real-time, and zero-drop checks. Every run uses a fresh SITL container; simulation
-time never resets while retaining an old controller container.
+The ArduPlane `--rate` value must equal the reciprocal physics timestep. The first JSON discovery
+packet may advertise the backend's 1200 Hz constructor default; release waits until later packets
+advertise the configured rate. Test 60, 120, and 240 Hz, then keep the slowest rate that meets
+convergence, real-time, and zero-drop checks. Every run uses a fresh SITL container; simulation time
+never resets while retaining an old controller container.
 
 Blocking UDP stays on a socket worker. A custom POD Chaos callback handles the bounded pre/post-step
 exchange. Rendering reads the latest immutable snapshot.
 
 ## Unreal physics details
 
-UE 5.6 source shows that `AsyncPhysicsTickComponent` runs before simulation while the game thread is
-frozen, so it cannot block on UDP. Simulation code uses the internal async physics handle. Chaos uses
+UE 5.8 source and the local smoke probe show that `AsyncPhysicsTickComponent` runs before simulation
+and requires the dedicated physics-thread body handle; game-thread `FBodyInstance` access is invalid
+there. The game thread is frozen, so it cannot block on UDP. Simulation code uses the internal async
+physics handle. Chaos uses
 mixed precision, supports rotational inertia through principal moments and a mass-frame rotation,
 and uses scalar translational mass. That last limit prevents Chaos from representing a full coupled
 6x6 mass matrix.
@@ -281,9 +288,9 @@ and uses scalar translational mass. That last limit prevents Chaos from represen
 The first setup uses async fixed timestep, normal substepping off, and inertia conditioning off while
 checking the model. Log requested and completed steps, dropped steps, callback time, and real-time
 factor. Recheck these source findings in the first Unreal probe. Public background:
-[coordinates](https://dev.epicgames.com/documentation/en-us/unreal-engine/coordinate-system-and-spaces-in-unreal-engine?application_version=5.6),
-[sub-stepping](https://dev.epicgames.com/documentation/en-us/unreal-engine/physics-sub-stepping-in-unreal-engine?application_version=5.6),
-and [units](https://dev.epicgames.com/documentation/en-us/unreal-engine/units-of-measurement-in-unreal-engine?application_version=5.6).
+[coordinates](https://dev.epicgames.com/documentation/en-us/unreal-engine/coordinate-system-and-spaces-in-unreal-engine?application_version=5.8),
+[sub-stepping](https://dev.epicgames.com/documentation/en-us/unreal-engine/physics-sub-stepping-in-unreal-engine?application_version=5.8),
+and [units](https://dev.epicgames.com/documentation/en-us/unreal-engine/units-of-measurement-in-unreal-engine?application_version=5.8).
 
 Async fixed physics is driven by elapsed Unreal time, not by PWM arrival, and may schedule several
 steps during one rendered frame. U0 must therefore run 30/60/144 Hz rendering against 60/120/240 Hz
@@ -368,21 +375,24 @@ ticks and signal IDs. A different clock needs an explicit resampling rule.
 
 | Step | Work | Check |
 |---|---|---|
-| P0 | state, clock, schemas, examples, logs and CLI | bad input fails; a tiny analytic model runs and replays |
-| B0 | licenses and dependency lock | sources, hashes, notices and packaging boundary are recorded |
-| A1-A4 | [aircraft model](AERO.md) | equations, JSBSim comparison, trim and linearization pass |
-| B1 | Linux/macOS UE setup | UE, native compiler, Docker networking, ports and dependencies pass |
-| G0 | [Cesium groundwork](UNREAL.md) | configured LLA, axes, height datum and setup failures pass |
-| U0 | Unreal mechanics and pacing probe | units, CoM, callback timing and one-command-per-step pass |
-| U1 | aircraft in Unreal | matched-state forces and open-loop response agree |
-| U2 | full Chaos and UDP exchange | chosen rate has correct timing and no hidden drops |
-| U3 | ArduPilot closed loop | warm-up, release, flight, failure and replay cases pass |
+| P0 | state, clock, schemas, examples, logs and CLI | implemented and passing |
+| B0 | licenses and dependency lock | implemented and passing |
+| A1-A4 | [aircraft model](AERO.md) | implemented; reference-model and numerical checks pass |
+| B1 | Linux/macOS UE setup | UE 5.8 macOS build and smoke pass; Linux release host remains |
+| G0 | [Cesium groundwork](UNREAL.md) | not yet accepted |
+| U0 | Unreal mechanics and pacing probe | finite 120 Hz smoke passes; full mechanics/rate matrix remains |
+| U1 | aircraft in Unreal | shared wrench path runs through Chaos; comparison not yet accepted |
+| U2 | full Chaos and UDP exchange | live controller transport probe passes; Unreal transport remains |
+| U3 | ArduPilot closed loop | pinned container and launcher pass independently; closed loop remains |
 
 The end-to-end example is:
 
 ```text
 validate -> trim -> linearize -> 1% elevator doublet -> compare -> SITL -> replay
 ```
+
+The authoritative release evidence and the line between implemented and proven are in
+[V1.md](V1.md).
 
 ## Later
 

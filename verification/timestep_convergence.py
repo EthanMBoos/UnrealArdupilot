@@ -42,7 +42,7 @@ def main():
         for rate in (120,240,480):
             config = dict(base)
             config["run_id"] = f"convergence_{rate}hz"
-            config["clock"] = {"fixed_dt_s":1/rate,"integrator":"rk4"}
+            config["clock"] = {"fixed_dt_s": 1 / rate, "motion_solver": "rk4"}
             config["initial_state"] = operating["state"]
             command = operating["command"]
             pulse = dict(command); pulse["elevator"] += 0.01

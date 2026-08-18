@@ -4,3 +4,10 @@
 /.cache/
 __pycache__/
 *.pyc
+/unreal/Plugins/UnrealVehicleDynamics/ThirdParty/Eigen/
+/unreal/Binaries/
+/unreal/DerivedDataCache/
+/unreal/Intermediate/
+/unreal/Saved/
+/unreal/Plugins/*/Binaries/
+/unreal/Plugins/*/Intermediate/

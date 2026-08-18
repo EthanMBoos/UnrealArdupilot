@@ -1,0 +1,18 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "UnrealVehicleDynamics",
+  "Description": "Controls-oriented vehicle forces and Unreal simulation.",
+  "Category": "Simulation",
+  "CreatedBy": "UnrealVehicleDynamics contributors",
+  "CanContainContent": true,
+  "Installed": false,
+  "Modules": [
+    {
+      "Name": "UnrealVehicleDynamics",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ]
+}

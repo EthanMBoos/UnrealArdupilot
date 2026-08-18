@@ -1,0 +1,17 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "Simulation",
+  "Description": "UnrealVehicleDynamics fixed-wing integration test project",
+  "Plugins": [
+    {
+      "Name": "UnrealVehicleDynamics",
+      "Enabled": true
+    },
+    {
+      "Name": "CesiumForUnreal",
+      "Enabled": true,
+      "Optional": true
+    }
+  ]
+}
