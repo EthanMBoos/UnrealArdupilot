@@ -133,6 +133,7 @@ def main():
     source_unreal_path = ROOT / "examples" / "runs" / "unreal_ardupilot.json"
     source_unreal_smoke_path = ROOT / "examples" / "runs" / "unreal_smoke.json"
     source_unreal_u0_path = ROOT / "examples" / "runs" / "unreal_u0.json"
+    source_unreal_u2_path = ROOT / "examples" / "runs" / "unreal_u2.json"
     source_run = json.loads(source_run_path.read_text())
     source_unreal = json.loads(source_unreal_path.read_text())
     source_aircraft = json.loads(source_aircraft_path.read_text())
@@ -151,6 +152,7 @@ def main():
         run([uvd, "validate", run_path])
         run([uvd, "validate", source_unreal_smoke_path])
         run([uvd, "validate", source_unreal_u0_path])
+        run([uvd, "validate", source_unreal_u2_path])
         run([uvd, "trim", run_path, "--output", root / "trim"])
         run([uvd, "linearize", run_path, "--output", root / "linear"])
         run([uvd, "simulate", run_path, "--output", root / "simulation"])

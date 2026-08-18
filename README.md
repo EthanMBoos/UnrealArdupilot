@@ -126,10 +126,10 @@ docs/       aircraft, Unreal, water, and C++ design details
 
 The headless fixed-wing path, finite UE 5.8/Chaos open-loop smoke run, and local
 U0 mechanics/timing and U1 model/trajectory suites are implemented. The
-ArduPlane container and live transport probe also work independently, but
-Unreal-side UDP, Cesium placement, U2-U3, and the Linux acceptance repeat remain
-before the project is a proven v1. See [V1.md](docs/V1.md) for the exact evidence
-gate.
+ArduPlane container now also completes a live 240-frame lockstep exchange with
+Unreal. Cesium placement, U2 fault injection, U3 readiness/arming/flight, and the
+Linux acceptance repeat remain before the project is a proven v1. See
+[V1.md](docs/V1.md) for the exact evidence gate.
 
 ## License
 

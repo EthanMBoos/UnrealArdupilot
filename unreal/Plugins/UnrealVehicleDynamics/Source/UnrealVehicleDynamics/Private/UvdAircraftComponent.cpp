@@ -5,6 +5,7 @@
 #include <numbers>
 
 #include "Chaos/ChaosEngineInterface.h"
+#include "Common/UdpSocketBuilder.h"
 #include "Components/PrimitiveComponent.h"
 #include "Dom/JsonObject.h"
 #include "Eigen/Eigenvalues"
@@ -23,6 +24,8 @@
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "SocketSubsystem.h"
+#include "Sockets.h"
 #include "uvd/core.hpp"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUvdAircraft, Log, All);
@@ -31,6 +34,19 @@ enum class EUvdProbeKind : uint8 {
   Aircraft,
   UnitForce,
   UnitTorque,
+};
+
+enum class EUvdControlFunction : uint8 {
+  Aileron,
+  Elevator,
+  Rudder,
+  Throttle,
+};
+
+struct FUvdPwmMapping {
+  int32 ChannelIndex = 0;
+  EUvdControlFunction Function = EUvdControlFunction::Aileron;
+  uvd::PwmCalibration Calibration;
 };
 
 struct FUvdScheduledCommand {
@@ -48,6 +64,13 @@ struct FUvdIntervalSample {
   uvd::AircraftModelOutput Model;
 };
 
+struct FUvdControllerFrameSample {
+  uint64 Interval = 0;
+  uint32 FrameCount = 0;
+  uint16 RateHz = 0;
+  uvd::AircraftCommand Command;
+};
+
 struct FUvdAircraftRuntime {
   uvd::AerosondeParameters Parameters;
   uvd::AircraftCommand Command;
@@ -55,8 +78,10 @@ struct FUvdAircraftRuntime {
   uvd::RigidBodyState FinalState;
   uvd::BodyWrench FinalWrench;
   TArray<FUvdScheduledCommand> Schedule;
+  TArray<FUvdPwmMapping> PwmMappings;
   TArray<uvd::RigidBodyState> StateByTick;
   TArray<FUvdIntervalSample> IntervalSamples;
+  TArray<FUvdControllerFrameSample> ControllerFrameSamples;
   double FixedDtS = 1.0 / 120.0;
   double MinObservedDtS = std::numeric_limits<double>::infinity();
   double MaxObservedDtS = 0.0;
@@ -89,6 +114,25 @@ struct FUvdAircraftRuntime {
   std::atomic<int32> FailureCode{0};
   std::atomic<bool> Finished{false};
   bool ReportWritten = false;
+  bool ControllerEnabled = false;
+  uint16 ControllerPort = 9002;
+  double StartupTimeoutS = 120.0;
+  double PacketTimeoutS = 10.0;
+  uint64 WarmupTicks = 0;
+  FSocket* ControllerSocket = nullptr;
+  TSharedPtr<FInternetAddr> ControllerEndpoint;
+  bool HasAcceptedFrame = false;
+  bool HasCachedReply = false;
+  uint32 FirstFrameCount = 0;
+  uint32 LastFrameCount = 0;
+  uint16 LastFrameRateHz = 0;
+  TArray<uint8> CachedReply;
+  uint64 AcceptedFrames = 0;
+  uint64 DuplicateFrames = 0;
+  uint64 MalformedFrames = 0;
+  uint64 GapFrames = 0;
+  uint64 StaleFrames = 0;
+  uvd::RigidBodyState IntervalStartState;
 };
 
 namespace {
@@ -199,7 +243,8 @@ uvd::SurfaceMap Surface(const TSharedPtr<FJsonObject>& Object) {
   };
 }
 
-bool LoadParameters(const FString& Path, uvd::AerosondeParameters& Parameters) {
+bool LoadParameters(const FString& Path, uvd::AerosondeParameters& Parameters,
+                    TArray<FUvdPwmMapping>& PwmMappings) {
   FString Source;
   if (!FFileHelper::LoadFileToString(Source, *Path)) {
     UE_LOG(LogUvdAircraft, Error, TEXT("Cannot read aircraft config: %s"),
@@ -292,6 +337,41 @@ bool LoadParameters(const FString& Path, uvd::AerosondeParameters& Parameters) {
       .elevator = Surface(Actuators->GetObjectField(TEXT("elevator"))),
       .rudder = Surface(Actuators->GetObjectField(TEXT("rudder"))),
   };
+
+  for (const TSharedPtr<FJsonValue>& MappingValue :
+       Root->GetArrayField(TEXT("channel_map"))) {
+    const TSharedPtr<FJsonObject> Mapping = MappingValue->AsObject();
+    const FString Function = Mapping->GetStringField(TEXT("function"));
+    EUvdControlFunction ControlFunction;
+    if (Function == TEXT("aileron")) {
+      ControlFunction = EUvdControlFunction::Aileron;
+    } else if (Function == TEXT("elevator")) {
+      ControlFunction = EUvdControlFunction::Elevator;
+    } else if (Function == TEXT("rudder")) {
+      ControlFunction = EUvdControlFunction::Rudder;
+    } else if (Function == TEXT("throttle")) {
+      ControlFunction = EUvdControlFunction::Throttle;
+    } else {
+      return false;
+    }
+    const int32 Channel =
+        static_cast<int32>(Mapping->GetNumberField(TEXT("channel")));
+    PwmMappings.Add({
+        .ChannelIndex = Channel - 1,
+        .Function = ControlFunction,
+        .Calibration =
+            {
+                .minimum = static_cast<uint16>(
+                    Mapping->GetNumberField(TEXT("pwm_min"))),
+                .trim = static_cast<uint16>(
+                    Mapping->GetNumberField(TEXT("pwm_trim"))),
+                .maximum = static_cast<uint16>(
+                    Mapping->GetNumberField(TEXT("pwm_max"))),
+                .reversed = Mapping->GetBoolField(TEXT("reversed")),
+                .throttle = Function == TEXT("throttle"),
+            },
+    });
+  }
   return true;
 }
 
@@ -379,6 +459,231 @@ TSharedPtr<FJsonObject> JsonWrench(const uvd::BodyWrench& Wrench) {
   Result->SetArrayField(TEXT("moment_body_Nm"),
                         JsonVector(Wrench.moment_body_Nm));
   return Result;
+}
+
+uint16 ReadUint16Le(const uint8* Data) {
+  return static_cast<uint16>(Data[0]) | (static_cast<uint16>(Data[1]) << 8U);
+}
+
+uint32 ReadUint32Le(const uint8* Data) {
+  return static_cast<uint32>(Data[0]) | (static_cast<uint32>(Data[1]) << 8U) |
+         (static_cast<uint32>(Data[2]) << 16U) |
+         (static_cast<uint32>(Data[3]) << 24U);
+}
+
+bool OpenControllerSocket(FUvdAircraftRuntime& Runtime) {
+  Runtime.ControllerSocket =
+      FUdpSocketBuilder(TEXT("UnrealVehicleDynamics ArduPilot JSON"))
+          .AsBlocking()
+          .AsReusable()
+          .BoundToPort(Runtime.ControllerPort)
+          .WithReceiveBufferSize(8192)
+          .WithSendBufferSize(8192);
+  if (!Runtime.ControllerSocket) {
+    UE_LOG(LogUvdAircraft, Error, TEXT("Could not bind controller UDP port %u"),
+           Runtime.ControllerPort);
+    return false;
+  }
+  UE_LOG(LogUvdAircraft, Display,
+         TEXT("Listening for controller PWM on UDP %u"),
+         Runtime.ControllerPort);
+  return true;
+}
+
+void CloseControllerSocket(FUvdAircraftRuntime& Runtime) {
+  if (!Runtime.ControllerSocket) {
+    return;
+  }
+  Runtime.ControllerSocket->Close();
+  ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
+      ->DestroySocket(Runtime.ControllerSocket);
+  Runtime.ControllerSocket = nullptr;
+}
+
+bool MapPwmCommand(const FUvdAircraftRuntime& Runtime, const uint8* Data,
+                   int32 ChannelCount, uvd::AircraftCommand& Command) {
+  for (const FUvdPwmMapping& Mapping : Runtime.PwmMappings) {
+    if (Mapping.ChannelIndex < 0 || Mapping.ChannelIndex >= ChannelCount) {
+      return false;
+    }
+    const uint16 Pwm = ReadUint16Le(Data + 8 + 2 * Mapping.ChannelIndex);
+    const double Value = uvd::map_pwm(Pwm, Mapping.Calibration);
+    switch (Mapping.Function) {
+      case EUvdControlFunction::Aileron:
+        Command.aileron = Value;
+        break;
+      case EUvdControlFunction::Elevator:
+        Command.elevator = Value;
+        break;
+      case EUvdControlFunction::Rudder:
+        Command.rudder = Value;
+        break;
+      case EUvdControlFunction::Throttle:
+        Command.throttle = Value;
+        break;
+    }
+  }
+  return true;
+}
+
+bool SendControllerState(FUvdAircraftRuntime& Runtime,
+                         const uvd::RigidBodyState& State,
+                         double OriginAltitudeMslM,
+                         const uvd::Vector3& WindNedMps) {
+  if (!Runtime.ControllerEndpoint.IsValid() || !Runtime.ControllerSocket) {
+    return false;
+  }
+  const uvd::Vector3 VelocityNed =
+      State.q_body_to_ned * State.velocity_body_mps;
+  const uvd::Vector3 PreviousVelocityNed =
+      Runtime.IntervalStartState.q_body_to_ned *
+      Runtime.IntervalStartState.velocity_body_mps;
+  const uvd::Vector3 AccelerationNed =
+      (VelocityNed - PreviousVelocityNed) / Runtime.FixedDtS;
+  const uvd::Vector3 SpecificForceBody =
+      State.q_body_to_ned.conjugate() *
+      (AccelerationNed - uvd::Vector3{0.0, 0.0, uvd::kGravityMps2});
+  const uvd::AtmosphereSnapshot Atmosphere = uvd::evaluate_isa(
+      OriginAltitudeMslM - State.position_ned_m.z(), WindNedMps);
+  const uvd::AirData Air = uvd::calculate_air_data(
+      State, Atmosphere, Runtime.Parameters.span_m, Runtime.Parameters.chord_m);
+
+  TSharedPtr<FJsonObject> Imu = MakeShared<FJsonObject>();
+  Imu->SetArrayField(TEXT("gyro"), JsonVector(State.omega_body_radps));
+  Imu->SetArrayField(TEXT("accel_body"), JsonVector(SpecificForceBody));
+  TSharedPtr<FJsonObject> Record = MakeShared<FJsonObject>();
+  Record->SetNumberField(TEXT("timestamp"),
+                         Runtime.StepIndex * Runtime.FixedDtS);
+  Record->SetObjectField(TEXT("imu"), Imu);
+  Record->SetArrayField(TEXT("position"), JsonVector(State.position_ned_m));
+  Record->SetArrayField(
+      TEXT("quaternion"),
+      {MakeShared<FJsonValueNumber>(State.q_body_to_ned.w()),
+       MakeShared<FJsonValueNumber>(State.q_body_to_ned.x()),
+       MakeShared<FJsonValueNumber>(State.q_body_to_ned.y()),
+       MakeShared<FJsonValueNumber>(State.q_body_to_ned.z())});
+  Record->SetArrayField(TEXT("velocity"), JsonVector(VelocityNed));
+  Record->SetNumberField(TEXT("airspeed"), Air.equivalent_airspeed_mps);
+  Record->SetBoolField(TEXT("no_time_sync"), false);
+  Record->SetBoolField(TEXT("no_lockstep"), false);
+
+  FString Rendered;
+  const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>>
+      Writer =
+          TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(
+              &Rendered);
+  if (!FJsonSerializer::Serialize(Record.ToSharedRef(), Writer)) {
+    return false;
+  }
+  Rendered = TEXT("\n") + Rendered + TEXT("\n");
+  const FTCHARToUTF8 Utf8(*Rendered);
+  Runtime.CachedReply.SetNumUninitialized(Utf8.Length());
+  FMemory::Memcpy(Runtime.CachedReply.GetData(), Utf8.Get(), Utf8.Length());
+  int32 Sent = 0;
+  const bool SentOk = Runtime.ControllerSocket->SendTo(
+      Runtime.CachedReply.GetData(), Runtime.CachedReply.Num(), Sent,
+      *Runtime.ControllerEndpoint);
+  Runtime.HasCachedReply = SentOk && Sent == Runtime.CachedReply.Num();
+  return Runtime.HasCachedReply;
+}
+
+bool ReceiveControllerCommand(FUvdAircraftRuntime& Runtime,
+                              uvd::AircraftCommand& Command) {
+  const double TimeoutS = Runtime.AcceptedFrames == 0 ? Runtime.StartupTimeoutS
+                                                      : Runtime.PacketTimeoutS;
+  const double DeadlineS = FPlatformTime::Seconds() + TimeoutS;
+  while (FPlatformTime::Seconds() < DeadlineS) {
+    const double RemainingS = DeadlineS - FPlatformTime::Seconds();
+    if (!Runtime.ControllerSocket->Wait(
+            ESocketWaitConditions::WaitForRead,
+            FTimespan::FromSeconds(FMath::Max(0.0, RemainingS)))) {
+      Runtime.FailureCode.store(6);
+      return false;
+    }
+    uint8 Data[256];
+    int32 BytesRead = 0;
+    TSharedRef<FInternetAddr> Sender =
+        ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->CreateInternetAddr();
+    if (!Runtime.ControllerSocket->RecvFrom(Data, sizeof(Data), BytesRead,
+                                            *Sender)) {
+      Runtime.FailureCode.store(6);
+      return false;
+    }
+    const int32 ChannelCount = BytesRead == 40 ? 16 : BytesRead == 72 ? 32 : 0;
+    const uint16 ExpectedMagic = ChannelCount == 16 ? 18458 : 29569;
+    if (ChannelCount == 0 || ReadUint16Le(Data) != ExpectedMagic) {
+      ++Runtime.MalformedFrames;
+      Runtime.FailureCode.store(5);
+      return false;
+    }
+    if (Runtime.ControllerEndpoint.IsValid() &&
+        !Runtime.ControllerEndpoint->CompareEndpoints(*Sender)) {
+      ++Runtime.MalformedFrames;
+      Runtime.FailureCode.store(5);
+      return false;
+    }
+    if (!Runtime.ControllerEndpoint.IsValid()) {
+      Runtime.ControllerEndpoint = Sender;
+    }
+
+    const uint16 RateHz = ReadUint16Le(Data + 2);
+    const uint32 FrameCount = ReadUint32Le(Data + 4);
+    if (Runtime.HasAcceptedFrame) {
+      const uint32 Delta = FrameCount - Runtime.LastFrameCount;
+      if (Delta == 0) {
+        ++Runtime.DuplicateFrames;
+        if (Runtime.HasCachedReply) {
+          int32 Sent = 0;
+          Runtime.ControllerSocket->SendTo(Runtime.CachedReply.GetData(),
+                                           Runtime.CachedReply.Num(), Sent,
+                                           *Runtime.ControllerEndpoint);
+        }
+        continue;
+      }
+      if (Delta == 0x80000000U) {
+        ++Runtime.StaleFrames;
+        Runtime.FailureCode.store(9);
+        return false;
+      }
+      if (Delta < 0x80000000U && Delta > 1) {
+        ++Runtime.GapFrames;
+        Runtime.FailureCode.store(8);
+        return false;
+      }
+      if (Delta > 0x80000000U) {
+        ++Runtime.StaleFrames;
+        Runtime.FailureCode.store(9);
+        return false;
+      }
+    }
+    const uint16 ExpectedRate =
+        static_cast<uint16>(FMath::RoundToInt(1.0 / Runtime.FixedDtS));
+    if (Runtime.AcceptedFrames >= 5 && RateHz != ExpectedRate) {
+      Runtime.FailureCode.store(10);
+      return false;
+    }
+    if (!MapPwmCommand(Runtime, Data, ChannelCount, Command)) {
+      ++Runtime.MalformedFrames;
+      Runtime.FailureCode.store(5);
+      return false;
+    }
+    if (!Runtime.HasAcceptedFrame) {
+      Runtime.FirstFrameCount = FrameCount;
+    }
+    Runtime.HasAcceptedFrame = true;
+    Runtime.LastFrameCount = FrameCount;
+    Runtime.LastFrameRateHz = RateHz;
+    Runtime.ControllerFrameSamples.Add({
+        .Interval = Runtime.StepIndex,
+        .FrameCount = FrameCount,
+        .RateHz = RateHz,
+        .Command = Command,
+    });
+    ++Runtime.AcceptedFrames;
+    return true;
+  }
+  Runtime.FailureCode.store(6);
+  return false;
 }
 
 bool SaveAircraftEvidence(const FString& BundlePath,
@@ -501,6 +806,30 @@ bool SaveAircraftEvidence(const FString& BundlePath,
              *FPaths::Combine(BundlePath, TEXT("unreal_model_samples.jsonl")));
 }
 
+bool SaveControllerEvidence(const FString& BundlePath,
+                            const FUvdAircraftRuntime& Runtime) {
+  if (!Runtime.ControllerEnabled) {
+    return true;
+  }
+  FString Frames = TEXT("interval,frame_count,rate_hz,aileron,elevator,rudder,")
+      TEXT("throttle\n");
+  for (const FUvdControllerFrameSample& Sample :
+       Runtime.ControllerFrameSamples) {
+    Frames += FString::Printf(TEXT("%llu,%u,%u"), Sample.Interval,
+                              Sample.FrameCount, Sample.RateHz);
+    AppendCsvNumber(Frames, Sample.Command.aileron);
+    AppendCsvNumber(Frames, Sample.Command.elevator);
+    AppendCsvNumber(Frames, Sample.Command.rudder);
+    AppendCsvNumber(Frames, Sample.Command.throttle);
+    Frames += TEXT("\n");
+  }
+  const FString ControllerDirectory =
+      FPaths::Combine(BundlePath, TEXT("controller"));
+  IFileManager::Get().MakeDirectory(*ControllerDirectory, true);
+  return FFileHelper::SaveStringToFile(
+      Frames, *FPaths::Combine(ControllerDirectory, TEXT("frames.csv")));
+}
+
 FString FailureReason(int32 FailureCode) {
   switch (FailureCode) {
     case 1:
@@ -511,6 +840,18 @@ FString FailureReason(int32 FailureCode) {
       return TEXT("missing_chaos_body");
     case 4:
       return TEXT("configuration_failure");
+    case 5:
+      return TEXT("malformed_controller_packet");
+    case 6:
+      return TEXT("controller_packet_timeout");
+    case 7:
+      return TEXT("controller_reply_failure");
+    case 8:
+      return TEXT("controller_frame_gap");
+    case 9:
+      return TEXT("controller_stale_frame");
+    case 10:
+      return TEXT("controller_rate_mismatch");
     default:
       return TEXT("completed");
   }
@@ -542,6 +883,11 @@ void UUvdAircraftComponent::BeginPlay() {
     Runtime->Finished.store(true, std::memory_order_release);
     return;
   }
+  if (Runtime->ControllerEnabled && !OpenControllerSocket(*Runtime)) {
+    Runtime->FailureCode.store(4);
+    Runtime->Finished.store(true, std::memory_order_release);
+    return;
+  }
   SetInitialState();
   if (Runtime->RenderRateHz > 0.0 && GEngine) {
     if (IConsoleVariable* VSync =
@@ -556,6 +902,9 @@ void UUvdAircraftComponent::BeginPlay() {
 
 void UUvdAircraftComponent::EndPlay(const EEndPlayReason::Type EndPlayReason) {
   SetAsyncPhysicsTickEnabled(false);
+  if (Runtime) {
+    CloseControllerSocket(*Runtime);
+  }
   delete Runtime;
   Runtime = nullptr;
   Super::EndPlay(EndPlayReason);
@@ -596,7 +945,7 @@ bool UUvdAircraftComponent::LoadAircraft() {
   if (FPaths::IsRelative(Path)) {
     Path = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), Path);
   }
-  if (!LoadParameters(Path, Runtime->Parameters)) {
+  if (!LoadParameters(Path, Runtime->Parameters, Runtime->PwmMappings)) {
     return false;
   }
   if (Runtime->Schedule.IsEmpty()) {
@@ -676,6 +1025,22 @@ bool UUvdAircraftComponent::LoadRun() {
       Runtime->HitchDurationS = Hitch->GetNumberField(TEXT("duration_s"));
     }
   }
+  if (Root->HasField(TEXT("controller"))) {
+    const TSharedPtr<FJsonObject> Controller =
+        Root->GetObjectField(TEXT("controller"));
+    if (Controller->GetStringField(TEXT("kind")) != TEXT("ardupilot_json")) {
+      return false;
+    }
+    Runtime->ControllerEnabled = true;
+    Runtime->ControllerPort =
+        static_cast<uint16>(Controller->GetNumberField(TEXT("udp_port")));
+    Runtime->StartupTimeoutS =
+        Controller->GetNumberField(TEXT("startup_timeout_s"));
+    Runtime->PacketTimeoutS =
+        Controller->GetNumberField(TEXT("packet_timeout_s"));
+    Runtime->WarmupTicks = static_cast<uint64>(FMath::RoundToDouble(
+        Controller->GetNumberField(TEXT("warmup_s")) / Runtime->FixedDtS));
+  }
 
   const TSharedPtr<FJsonObject> Controls =
       Root->GetObjectField(TEXT("controls"));
@@ -746,6 +1111,8 @@ bool UUvdAircraftComponent::LoadRun() {
   }
   Runtime->StateByTick.Reserve(static_cast<int32>(Runtime->FinalTick + 1));
   Runtime->IntervalSamples.Reserve(static_cast<int32>(Runtime->FinalTick));
+  Runtime->ControllerFrameSamples.Reserve(
+      static_cast<int32>(Runtime->FinalTick));
   return true;
 }
 
@@ -884,6 +1251,16 @@ void UUvdAircraftComponent::FinishRun() {
   const bool CommandAccountingPassed =
       AllCommandsApplied &&
       Runtime->CommandIntervalRecords == Runtime->StepIndex;
+  const uint16 ExpectedControllerRateHz =
+      static_cast<uint16>(FMath::RoundToInt(1.0 / Runtime->FixedDtS));
+  const bool ControllerTransportPassed =
+      !Runtime->ControllerEnabled ||
+      (Runtime->AcceptedFrames == Runtime->StepIndex &&
+       Runtime->ControllerFrameSamples.Num() ==
+           static_cast<int32>(Runtime->StepIndex) &&
+       Runtime->LastFrameRateHz == ExpectedControllerRateHz &&
+       Runtime->MalformedFrames == 0 && Runtime->GapFrames == 0 &&
+       Runtime->StaleFrames == 0);
   const uint64 PhysicsStepsDuringHitch =
       Runtime->HitchEndStep >= Runtime->HitchStartStep
           ? Runtime->HitchEndStep - Runtime->HitchStartStep
@@ -899,6 +1276,8 @@ void UUvdAircraftComponent::FinishRun() {
            static_cast<int32>(Runtime->StepIndex + 1));
   const bool EvidenceFilesWritten =
       BundlePath.IsEmpty() || SaveAircraftEvidence(BundlePath, *Runtime);
+  const bool ControllerEvidenceWritten =
+      BundlePath.IsEmpty() || SaveControllerEvidence(BundlePath, *Runtime);
   const bool Passed =
       FailureCode == 0 && Runtime->StepIndex == Runtime->FinalTick &&
       FiniteFinalState && FiniteFinalWrench &&
@@ -906,7 +1285,8 @@ void UUvdAircraftComponent::FinishRun() {
       FMath::Abs(Runtime->MaxObservedDtS - Runtime->FixedDtS) <= 1e-6 &&
       BodyConfigurationPassed && MechanicsResponsePassed &&
       CommandAccountingPassed && HitchPassed && EvidenceComplete &&
-      EvidenceFilesWritten;
+      EvidenceFilesWritten && ControllerTransportPassed &&
+      ControllerEvidenceWritten;
   const FString StopReason = FailureCode != 0 ? FailureReason(FailureCode)
                              : Passed         ? TEXT("completed")
                                               : TEXT("acceptance_failure");
@@ -965,6 +1345,26 @@ void UUvdAircraftComponent::FinishRun() {
   Metrics->SetBoolField(TEXT("render_hitch_passed"), HitchPassed);
   Metrics->SetBoolField(TEXT("evidence_complete"), EvidenceComplete);
   Metrics->SetBoolField(TEXT("evidence_files_written"), EvidenceFilesWritten);
+  Metrics->SetBoolField(TEXT("controller_transport_passed"),
+                        ControllerTransportPassed);
+  Metrics->SetBoolField(TEXT("controller_evidence_written"),
+                        ControllerEvidenceWritten);
+  Metrics->SetNumberField(TEXT("accepted_controller_frames"),
+                          static_cast<double>(Runtime->AcceptedFrames));
+  Metrics->SetNumberField(TEXT("duplicate_controller_frames"),
+                          static_cast<double>(Runtime->DuplicateFrames));
+  Metrics->SetNumberField(TEXT("malformed_controller_frames"),
+                          static_cast<double>(Runtime->MalformedFrames));
+  Metrics->SetNumberField(TEXT("controller_frame_gaps"),
+                          static_cast<double>(Runtime->GapFrames));
+  Metrics->SetNumberField(TEXT("stale_controller_frames"),
+                          static_cast<double>(Runtime->StaleFrames));
+  Metrics->SetNumberField(TEXT("first_controller_frame_count"),
+                          static_cast<double>(Runtime->FirstFrameCount));
+  Metrics->SetNumberField(TEXT("last_controller_frame_count"),
+                          static_cast<double>(Runtime->LastFrameCount));
+  Metrics->SetNumberField(TEXT("last_controller_rate_hz"),
+                          Runtime->LastFrameRateHz);
 
   TSharedPtr<FJsonObject> BodyConfiguration = MakeShared<FJsonObject>();
   BodyConfiguration->SetNumberField(TEXT("target_mass_kg"),
@@ -1104,6 +1504,14 @@ void UUvdAircraftComponent::AsyncPhysicsTickComponent(float DeltaTime,
       Runtime->StateByTick.Num() == static_cast<int32>(Runtime->StepIndex)) {
     Runtime->StateByTick.Add(State);
   }
+  if (Runtime->ControllerEnabled && Runtime->HasAcceptedFrame &&
+      !SendControllerState(*Runtime, State, OriginAltitudeMslM,
+                           ToUvd(WindNedMps))) {
+    Runtime->FinalState = State;
+    Runtime->FailureCode.store(7);
+    Runtime->Finished.store(true, std::memory_order_release);
+    return;
+  }
   if (Runtime->StepIndex >= Runtime->FinalTick) {
     Runtime->FinalState = State;
     Runtime->Finished.store(true, std::memory_order_release);
@@ -1132,6 +1540,18 @@ void UUvdAircraftComponent::AsyncPhysicsTickComponent(float DeltaTime,
       ++Runtime->LateCommandUpdates;
     }
     ++Runtime->NextScheduleIndex;
+  }
+  if (Runtime->ControllerEnabled) {
+    uvd::AircraftCommand ControllerCommand;
+    if (!ReceiveControllerCommand(*Runtime, ControllerCommand)) {
+      Runtime->FinalState = State;
+      Runtime->Finished.store(true, std::memory_order_release);
+      return;
+    }
+    if (Runtime->StepIndex >= Runtime->WarmupTicks) {
+      Runtime->Command = ControllerCommand;
+    }
+    Runtime->IntervalStartState = State;
   }
   uvd::BodyWrench AppliedWrench;
   if (Runtime->ProbeKind == EUvdProbeKind::Aircraft) {

@@ -251,16 +251,10 @@ fs::path unreal_preflight(bool require_sitl_dependencies) {
       "Xcode compiler");
 #endif
   if (editor && find_cesium_plugin(*editor)) {
-    if (require_sitl_dependencies) {
-      require(cesium_228_is_installed(*editor), "Cesium for Unreal 2.28");
-    } else {
-      std::cout << (cesium_228_is_installed(*editor) ? "pass " : "note ")
-                << "Cesium for Unreal (not used by smoke run)\n";
-    }
-  } else if (require_sitl_dependencies) {
-    require(false, "Cesium for Unreal 2.28");
+    std::cout << (cesium_228_is_installed(*editor) ? "pass " : "note ")
+              << "Cesium for Unreal (not required for local dynamics)\n";
   } else {
-    std::cout << "skip Cesium for Unreal (not needed for smoke run)\n";
+    std::cout << "skip Cesium for Unreal (not required for local dynamics)\n";
   }
   if (require_sitl_dependencies) {
     require(run_process({"docker", "version"}, "/dev/null") == 0, "Docker");
@@ -439,15 +433,23 @@ void run_sitl(const RunConfig& run,
     waitpid(controller, nullptr, 0);
   }
 
-  manifest["status"] = exit_code == 0 ? "complete" : "failed";
-  manifest["stop_reason"] =
-      exit_code == 0 ? "launcher_completed" : "launcher_failed";
-  manifest["launcher_exit_code"] = exit_code;
-  write_text(bundle / "manifest.json", manifest.dump(2) + "\n");
-  if (exit_code != 0) {
-    throw std::runtime_error("SITL launcher exited with code " +
-                             std::to_string(exit_code));
+  try {
+    manifest = parse_strict(bundle / "manifest.json");
+  } catch (const std::exception&) {
+    manifest["status"] = "failed";
+    manifest["stop_reason"] = "missing_unreal_report";
   }
+  manifest["launcher_exit_code"] = exit_code;
+  if (finished != unreal || exit_code != 0) {
+    manifest["status"] = "failed";
+    manifest["stop_reason"] =
+        finished == unreal ? "unreal_exit_failure" : "controller_exit_failure";
+  }
+  write_text(bundle / "manifest.json", manifest.dump(2) + "\n");
+  if (manifest.value("status", std::string{}) != "complete") {
+    throw std::runtime_error("SITL run failed; see " + unreal_log.string());
+  }
+  std::cout << bundle << '\n';
 }
 
 }  // namespace uvd::app

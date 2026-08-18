@@ -86,11 +86,13 @@ python3 ardupilot/transport_probe.py --frames 50
 
 ```sh
 build/uvd sitl examples/runs/unreal_ardupilot.json --preflight
+build/uvd sitl examples/runs/unreal_u2.json
 ```
 
-The Unreal plugin does not yet implement the JSON/UDP controller session, so `uvd sitl` is not yet
-an end-to-end flight command. The live probe catches Docker host-routing, startup, packet-layout,
-frame-count, and controller-rate errors without pretending it validates Chaos or the aircraft.
+The short U2 case consumes and records 240 real ArduPlane PWM frames while holding the aircraft at
+its scripted trim command. It proves the live Docker-to-Unreal lockstep transport, not flight
+readiness: mode, arming, estimator health, and release criteria remain U3 work. Cesium is not needed
+for this local dynamics case; it remains required for G0 terrain evidence.
 
 ## C++ editor setup
 

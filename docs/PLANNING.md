@@ -272,8 +272,10 @@ advertise the configured rate. Test 60, 120, and 240 Hz, then keep the slowest r
 convergence, real-time, and zero-drop checks. Every run uses a fresh SITL container; simulation time
 never resets while retaining an old controller container.
 
-Blocking UDP stays on a socket worker. A custom POD Chaos callback handles the bounded pre/post-step
-exchange. Rendering reads the latest immutable snapshot.
+The first working transport slice performs a bounded blocking receive in the async Chaos callback.
+This gives an exact receive-step-reply sequence without involving the game/render thread; the local
+120 Hz run measured a 5.6 ms worst callback wait. Move the socket wait to a worker with a bounded
+handoff if later platform evidence cannot keep that wait below the fixed timestep.
 
 ## Unreal physics details
 
@@ -382,7 +384,7 @@ ticks and signal IDs. A different clock needs an explicit resampling rule.
 | G0 | [Cesium groundwork](UNREAL.md) | not yet accepted |
 | U0 | Unreal mechanics and pacing probe | full local macOS suite passes; Linux repeat remains for release evidence |
 | U1 | aircraft in Unreal | matched-state wrench and timestep-refinement suite passes locally; Linux repeat remains |
-| U2 | full Chaos and UDP exchange | live controller transport probe passes; Unreal transport remains |
+| U2 | full Chaos and UDP exchange | live 240-frame Unreal/ArduPlane exchange passes locally; explicit fault injection remains |
 | U3 | ArduPilot closed loop | pinned container and launcher pass independently; closed loop remains |
 
 The end-to-end example is:
