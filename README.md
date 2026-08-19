@@ -1,83 +1,131 @@
 # UnrealVehicleDynamics
 
-A small fixed-wing simulation that runs ArduPlane against an aircraft in Unreal Engine and places
-it with Cesium.
+UnrealVehicleDynamics is a vehicle-dynamics and controls simulator built around
+Unreal Engine and a shared C++ dynamics core. It targets aerial and marine
+vehicles and integrates external control systems, starting with ArduPilot SITL.
+The first vehicle is a fixed-wing Aerosonde; boat support follows.
 
-This is intentionally a v1, not a simulation framework. There is one aircraft, one run file, one
-flight mode, and one launcher.
+The headless `uvd` executable supports model evaluation, simulation, trim, and
+linearization. Aircraft parameters and run settings live in JSON, so controls
+work does not require editing the model source.
 
-## What runs
+The fixed-wing model is checked against JSBSim before ArduPlane closes the loop
+in Unreal. See [PLANNING.md](docs/PLANNING.md) for the roadmap, and
+[docs/AERO.md](docs/AERO.md) for the aircraft model.
+
+## Architecture
+
+The shared C++ core answers one question: **given the vehicle state, controls,
+and environment, what forces and moments act on the vehicle?** It contains the
+engineering equations. It does not render anything.
 
 ```text
-Unreal body position
-    -> Cesium longitude / latitude / ellipsoid height
-    -> local NED state
-    -> Aerosonde force and moment model
-    -> Unreal Chaos
-    -> ArduPilot JSON state
-    -> ArduPlane PWM commands
+controller command
+        |
+        v
+shared C++ force model
+        |
+        | force + moment
+        v
+motion integrator
+        |
+        | new position, velocity and attitude
+        +------> Unreal renders the vehicle
+        +------> simulated sensors feed the controller
 ```
 
-The aircraft starts 500 m above the configured origin on a trimmed air-start. Unreal sends that
-state to ArduPlane while ArduPlane initializes. Once GPS and EKF are ready, the small container
-helper selects FBWA, arms, and tells Unreal to use the ArduPlane outputs instead of the trim values.
+Unreal is the main simulation runtime, not a visualizer bolted onto a separate
+solver. The shared C++ sources compile directly into the Unreal plugin. The
+current path loads the run configuration and lets Unreal own the fixed physics
+clock, world, actor, and collisions while the core supplies the vehicle math.
+When Chaos owns motion, the Unreal component gives the core a state in standard
+SI and NED/FRD coordinates on each physics tick. The core returns a body force
+and moment and the component applies it once. ArduPlane receives the committed
+state and returns PWM commands through its JSON backend.
 
-Cesium is the source of the live LLA position. ArduPilot's JSON backend expects local NED, so the
-plugin converts the Cesium LLA to NED once and gives that same state to both the force model and
-ArduPilot. The Unreal log prints the LLA-to-NED result once per simulated second.
+The headless CLI replaces Chaos with the core's built-in motion solver. That
+solver turns forces and moments into the next vehicle state using a standard
+fourth-order Runge-Kutta method, commonly called RK4. With no engine startup, it
+can quickly evaluate, simulate, trim, and linearize the same model. This is the
+engineering test bench for the Unreal runtime: the same state reaches the same
+force model, and the RK4 trajectory can be checked as the timestep is refined.
 
-## Requirements
+Chaos owns motion when its rigid-body model can represent the problem, as in the
+first aircraft and boat demos. If an engineering model needs physics Chaos
+cannot express, the core owns that vehicle's state and Unreal renders the
+committed pose. The tool is still native to Unreal: configuration, controls,
+sensors, maps, timing, logging, replay, and visualization stay in the same
+workflow. Only the solver responsible for advancing the state changes.
 
-- Unreal Engine 5.8 (tested with 5.8.1)
-- Cesium for Unreal installed in that engine (tested with 2.29.0)
-- Xcode on macOS
-- Docker Desktop
-- CMake 3.28 or newer
-- Python 3
+Water is the hardest version of this contract and may justify a paper by itself.
+The first demo uses one Unreal Water wave definition for both the visible
+surface and buoyancy queries. Before that result is accepted, sampled water
+heights must remain on the rendered surface through pause, reset, replay, and
+different render and physics rates. A later seakeeping model will require richer
+wave and hull physics; if stock Unreal Water cannot reproduce it, a
+project-owned render path must consume the same saved wave components, phase,
+and simulation timestamp as the force model. A visible crest where the physics
+sees a trough is a failed simulation.
 
-The launcher uses the normal UE 5.8 install location on macOS. For another installation, set
-`UVD_UNREAL_EDITOR` to the UnrealEditor executable.
+## Quick start
 
-For Cesium World Terrain, create your local environment file once:
+Install the host tools as described in [INSTALL.md](docs/INSTALL.md).
+Build the headless simulator:
 
-```sh
+```bash
+cmake -S . -B build
+cmake --build build
+```
+
+Then run a case from the repository root:
+
+```bash
+build/uvd evaluate examples/run.json
+build/uvd simulate examples/run.json --duration 10 --output runs/headless.csv
+build/uvd trim examples/run.json
+build/uvd linearize examples/run.json --output runs/linear-model.json
+```
+
+With Unreal Engine 5.8, Cesium for Unreal, Xcode on macOS, and Docker installed,
+run the live Cesium/Chaos/ArduPlane case:
+
+```bash
 cp .env.example .env
-```
-
-Then paste your token into `.env`:
-
-```dotenv
-CESIUM_ION_TOKEN=your_token
-```
-
-The launcher reads `.env` automatically. The file is ignored by Git and the token is never logged.
-Use a Cesium ion token limited to the assets this simulation needs. Without a token, the run still
-uses Cesium coordinates and displays Cesium's built-in ellipsoid instead of ion terrain.
-
-## Run it
-
-From the repository root:
-
-```sh
+# Put CESIUM_ION_TOKEN=... in .env, then:
 ./run.py
 ```
 
-The first run downloads Eigen, compiles the Unreal plugin, and builds ArduPlane in Docker. Later
-runs reuse those builds. Close the Unreal window or press Control-C in the terminal to stop Unreal
-and the container.
+The launcher builds the shared dependencies and Unreal plugin, starts the
+ArduPlane container, opens the full Unreal window, and cleans both processes up
+when either exits. The Cesium token stays in the ignored local `.env` file.
 
-Edit [examples/run.json](examples/run.json) to change the origin, initial state, wind, trim, ports,
-or Cesium asset ID. The corresponding aircraft constants and PWM channel map are in
-[examples/aircraft/aerosonde.json](examples/aircraft/aerosonde.json).
+The two lightweight numerical checks are:
 
-## Code kept in v1
+```bash
+python3 validation/timestep_convergence.py
+python3 validation/jsbsim_compare.py
+```
 
-- `core/`: force model, coordinate conversion, and the few state helpers used at runtime
-- `unreal/`: the host project and one simulation component
-- `ardupilot/`: the ArduPlane image and the short FBWA startup helper
-- `run.py`: build, launch, and cleanup
-- `examples/`: the only aircraft and run configuration
+## Repository layout
 
-There is deliberately no schema system, offline CLI, evidence bundle, replay framework, fault
-injector, acceptance-gate matrix, or version-release process. Git history contains the earlier
-verification work if any of it becomes useful later.
+```text
+core/       fixed-wing equations, rigid-body dynamics, and integration
+cli/        small headless engineering test bench
+unreal/     Unreal host project and Cesium/Chaos/ArduPilot plugin
+ardupilot/  ArduPlane container and FBWA startup helper
+validation/ optional JSBSim comparison and timestep-convergence check
+examples/   aircraft parameters and the v1 run configuration
+docs/       aircraft, Unreal, water, and C++ design details
+```
+
+The v1 currently flies the Aerosonde locally with UE 5.8.1, Cesium, Chaos, and
+ArduPlane in FBWA. The CLI compiles the same force model and provides the fast
+headless path for model inspection and controls work. This is a useful working
+simulation, not yet a claim of physical Aerosonde fidelity; see
+[V1.md](docs/V1.md) for the practical boundary.
+
+## License
+
+Project code and documentation use the [MIT License](LICENSE). Third-party
+licenses and packaging boundaries are recorded in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

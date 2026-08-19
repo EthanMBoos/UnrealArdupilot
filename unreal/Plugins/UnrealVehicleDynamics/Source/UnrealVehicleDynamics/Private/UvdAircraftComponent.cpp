@@ -754,6 +754,3 @@ void UUvdAircraftComponent::AsyncPhysicsTickComponent(float DeltaTime,
 }
 
 // UnrealBuildTool cannot compile sources outside a module directly.
-#include "fixed_wing.cpp"
-#include "geodesy.cpp"
-#include "rigid_body.cpp"

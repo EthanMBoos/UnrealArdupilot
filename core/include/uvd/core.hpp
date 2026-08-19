@@ -14,6 +14,7 @@ inline constexpr double kSeaLevelDensityKgpm3 = 1.225;
 // Fixed-size Eigen objects make the mathematical dimensions explicit without
 // allocating in the per-tick model.
 using Vector3 = Eigen::Vector3d;
+using Vector4 = Eigen::Vector4d;
 using Matrix3 = Eigen::Matrix3d;
 using Quaternion = Eigen::Quaterniond;
 
@@ -33,6 +34,12 @@ struct GeodeticPosition {
 // Quaternion conventions are Hamilton (w, x, y, z), active, body to NED.
 [[nodiscard]] Quaternion normalize_quaternion(Quaternion q) noexcept;
 [[nodiscard]] Quaternion canonicalize(Quaternion q) noexcept;
+[[nodiscard]] Quaternion quaternion_from_euler(double roll_rad,
+                                               double pitch_rad,
+                                               double yaw_rad) noexcept;
+[[nodiscard]] Vector3 rotation_vector(Quaternion q) noexcept;
+[[nodiscard]] Quaternion exp_quaternion(
+    const Vector3& rotation_vector_rad) noexcept;
 
 struct RigidBodyState {
   Vector3 position_ned_m = Vector3::Zero();
@@ -211,11 +218,20 @@ struct AircraftModelOutput {
   bool valid{true};
 };
 
+struct StateDerivative {
+  Vector3 position_dot_ned_mps = Vector3::Zero();
+  Vector4 quaternion_dot_wxyz = Vector4::Zero();
+  Vector3 velocity_dot_body_mps2 = Vector3::Zero();
+  Vector3 omega_dot_body_radps2 = Vector3::Zero();
+};
+
 [[nodiscard]] AtmosphereSnapshot evaluate_isa(
     double altitude_msl_m,
     const Vector3& wind_ned_mps = Vector3::Zero()) noexcept;
 [[nodiscard]] AircraftEffectorState map_command(
     const AircraftCommand& command, const ActuatorMap& map) noexcept;
+[[nodiscard]] AircraftCommand invert_effector_map(
+    const AircraftEffectorState& effectors, const ActuatorMap& map) noexcept;
 [[nodiscard]] double map_pwm(std::uint16_t pwm,
                              const PwmCalibration& calibration) noexcept;
 
@@ -237,6 +253,18 @@ struct AircraftModelOutput {
     const RigidBodyState& state, const AircraftEffectorState& effectors,
     const AtmosphereSnapshot& atmosphere,
     const AerosondeParameters& parameters) noexcept;
+
+[[nodiscard]] StateDerivative rigid_body_derivative(
+    const RigidBodyState& state, const BodyWrench& applied_wrench,
+    double mass_kg, const Matrix3& inertia_body_kgm2) noexcept;
+[[nodiscard]] StateDerivative evaluate_aerosonde_state_derivative(
+    const RigidBodyState& state, const AircraftEffectorState& effectors,
+    const AtmosphereSnapshot& atmosphere,
+    const AerosondeParameters& parameters) noexcept;
+[[nodiscard]] RigidBodyState step_aerosonde_rk4(
+    const RigidBodyState& state, const AircraftEffectorState& effectors,
+    double origin_altitude_msl_m, const Vector3& wind_ned_mps,
+    const AerosondeParameters& parameters, double dt_s) noexcept;
 
 [[nodiscard]] bool is_finite(const RigidBodyState& state) noexcept;
 [[nodiscard]] bool is_finite(const BodyWrench& wrench) noexcept;

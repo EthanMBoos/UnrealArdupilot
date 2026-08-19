@@ -21,6 +21,17 @@ double map_surface(double command, const SurfaceMap& map) noexcept {
                     map.min_rad, map.max_rad);
 }
 
+double invert_surface(double angle_rad, const SurfaceMap& map) noexcept {
+  const double clamped = std::clamp(angle_rad, map.min_rad, map.max_rad);
+  const double offset = clamped - map.neutral_rad;
+  const double excursion = offset >= 0.0 ? map.max_rad - map.neutral_rad
+                                         : map.neutral_rad - map.min_rad;
+  if (excursion <= 0.0) {
+    return 0.0;
+  }
+  return std::clamp((offset / excursion) * map.direction, -1.0, 1.0);
+}
+
 double stable_sigmoid(double x) noexcept {
   if (x >= 0.0) {
     const double exp_negative_x = std::exp(-x);
@@ -79,6 +90,16 @@ AircraftEffectorState map_command(const AircraftCommand& command,
       .elevator_rad = map_surface(command.elevator, map.elevator),
       .rudder_rad = map_surface(command.rudder, map.rudder),
       .throttle = std::clamp(command.throttle, 0.0, 1.0),
+  };
+}
+
+AircraftCommand invert_effector_map(const AircraftEffectorState& effectors,
+                                    const ActuatorMap& map) noexcept {
+  return AircraftCommand{
+      .aileron = invert_surface(effectors.aileron_rad, map.aileron),
+      .elevator = invert_surface(effectors.elevator_rad, map.elevator),
+      .rudder = invert_surface(effectors.rudder_rad, map.rudder),
+      .throttle = std::clamp(effectors.throttle, 0.0, 1.0),
   };
 }
 
