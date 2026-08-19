@@ -38,14 +38,21 @@ ArduPilot. The Unreal log prints the LLA-to-NED result once per simulated second
 The launcher uses the normal UE 5.8 install location on macOS. For another installation, set
 `UVD_UNREAL_EDITOR` to the UnrealEditor executable.
 
-For Cesium World Terrain, export a Cesium ion token before launching:
+For Cesium World Terrain, create your local environment file once:
 
 ```sh
-export CESIUM_ION_TOKEN=your_token
+cp .env.example .env
 ```
 
-Without a token, the run still uses Cesium coordinates and displays Cesium's built-in ellipsoid
-instead of ion terrain.
+Then paste your token into `.env`:
+
+```dotenv
+CESIUM_ION_TOKEN=your_token
+```
+
+The launcher reads `.env` automatically. The file is ignored by Git and the token is never logged.
+Use a Cesium ion token limited to the assets this simulation needs. Without a token, the run still
+uses Cesium coordinates and displays Cesium's built-in ellipsoid instead of ion terrain.
 
 ## Run it
 

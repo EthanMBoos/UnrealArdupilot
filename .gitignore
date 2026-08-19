@@ -2,6 +2,7 @@
 /runs/
 /.venv/
 /.cache/
+/.env
 __pycache__/
 *.pyc
 /unreal/Plugins/UnrealVehicleDynamics/ThirdParty/Eigen/
