@@ -9,6 +9,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Dom/JsonObject.h"
 #include "Eigen/Eigenvalues"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
@@ -525,6 +526,23 @@ void UUvdAircraftComponent::EndPlay(const EEndPlayReason::Type EndPlayReason) {
   delete Runtime;
   Runtime = nullptr;
   Super::EndPlay(EndPlayReason);
+}
+
+void UUvdAircraftComponent::TickComponent(
+    float DeltaTime, ELevelTick TickType,
+    FActorComponentTickFunction* ThisTickFunction) {
+  Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+  if (!ChaseViewActive) {
+    ActivateChaseView();
+  }
+}
+
+void UUvdAircraftComponent::ActivateChaseView() {
+  if (APlayerController* Controller = GetWorld()->GetFirstPlayerController()) {
+    Controller->SetViewTarget(GetOwner());
+    ChaseViewActive = true;
+    UE_LOG(LogUvdAircraft, Display, TEXT("Chase camera active"));
+  }
 }
 
 bool UUvdAircraftComponent::LoadConfiguration() {

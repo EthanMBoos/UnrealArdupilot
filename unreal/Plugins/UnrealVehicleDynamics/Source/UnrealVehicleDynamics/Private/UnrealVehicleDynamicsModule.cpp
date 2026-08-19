@@ -3,7 +3,6 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
-#include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -80,10 +79,6 @@ class FUnrealVehicleDynamicsModule final : public IModuleInterface {
     Camera->SetFieldOfView(70.0F);
     Camera->SetActive(true);
     Camera->RegisterComponent();
-
-    if (APlayerController* Controller = World->GetFirstPlayerController()) {
-      Controller->SetViewTarget(Aircraft);
-    }
 
     UUvdAircraftComponent* Simulation =
         NewObject<UUvdAircraftComponent>(Aircraft, TEXT("VehicleDynamics"));
