@@ -9,8 +9,8 @@ The headless `uvd` executable supports model evaluation, simulation, trim, and
 linearization. Aircraft parameters and run settings live in JSON, so controls
 work does not require editing the model source.
 
-The fixed-wing model is checked against JSBSim before ArduPlane closes the loop
-in Unreal. See [PLANNING.md](docs/PLANNING.md) for the roadmap, and
+The headless tools compare the fixed-wing model with JSBSim, and Unreal runs it
+with ArduPlane. See [PLANNING.md](docs/PLANNING.md) for the roadmap, and
 [docs/AERO.md](docs/AERO.md) for the aircraft model.
 
 ## Architecture
@@ -119,10 +119,13 @@ docs/       aircraft, Unreal, water, and C++ design details
 ```
 
 The v1 currently flies the Aerosonde locally with UE 5.8.1, Cesium, Chaos, and
-ArduPlane in FBWA. The CLI compiles the same force model and provides the fast
-headless path for model inspection and controls work. This is a useful working
-simulation, not yet a claim of physical Aerosonde fidelity; see
-[V1.md](docs/V1.md) for the practical boundary.
+ArduPlane stabilizing the aircraft in Fly By Wire A (FBWA) mode. FBWA exercises
+ArduPlane's basic roll and pitch controllers without requiring a mission,
+autonomous navigation, takeoff, or landing. The CLI compiles the same force
+model and provides the fast headless path for model inspection and controls
+work. This is a useful working simulation, not yet a claim of physical
+Aerosonde fidelity; see
+[ARDUPILOT.md](docs/ARDUPILOT.md) for the first engineering push.
 
 ## License
 

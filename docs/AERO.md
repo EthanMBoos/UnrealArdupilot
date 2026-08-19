@@ -318,5 +318,6 @@ the discrete local model at that operating point.
 | A3 | propeller, ISA and trim | the saved operating point has small residuals |
 | A4 | RK4 and linearization | timestep error shrinks and finite local matrices are produced |
 
-The first Cesium/Chaos/ArduPlane path is described in [V1.md](V1.md). Flight-data validation, better
-stall data, ground operation, richer propulsion, sensor errors, and more aircraft come later.
+The first Cesium/Chaos/ArduPlane path and its next engineering milestones are described in
+[ARDUPILOT.md](ARDUPILOT.md). Flight-data validation, better stall data, ground operation, richer
+propulsion, sensor errors, and more aircraft come later.

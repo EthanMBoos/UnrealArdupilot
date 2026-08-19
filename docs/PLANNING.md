@@ -8,7 +8,8 @@ appropriate—rigid-body motion. A shared C++ engineering core keeps the force m
 Unreal so they can be exercised quickly and compared with established tools.
 
 The first end-to-end slice is one air-started Aerosonde controlled by ArduPlane over Cesium terrain.
-The next major slice is marine dynamics. PX4, richer sensors, uncertainty studies, and
+The first product push is making that path useful to ArduPilot engineers; see
+[ARDUPILOT.md](ARDUPILOT.md). Marine dynamics, PX4, richer sensors, uncertainty studies, and
 experiment-grade artifacts follow when a concrete study needs them.
 
 The development loop is:
@@ -175,9 +176,12 @@ lockfile or release process for every local tool.
 
 ## Near-term work
 
-1. Keep the v1 flight easy to launch and visually inspect.
-2. Add a real aircraft mesh and verify its scale, center of mass, collision, and body-axis alignment.
-3. Exercise CLI trim away from the saved operating point and add a small scripted perturbation.
-4. Record enough Unreal and ArduPlane state to plot one closed-loop flight alongside headless model
-   evaluations.
-5. Decide the first research question before expanding sensors, faults, replay, or release tooling.
+1. Extract a documented plant boundary so an engineer can bring compatible aircraft data or a
+   custom C++ force model without modifying the ArduPilot and Unreal integration.
+2. Preserve ArduPilot DataFlash logs and structured simulator truth from every requested run.
+3. Expose a normal Mission Planner/MAVProxy connection.
+4. Accept an engineer-provided ArduPlane Docker image and parameter file.
+5. Ship one repeatable FBWA response case with a useful truth-versus-estimate plot.
+6. Connect the ArduPlane JSON loop to headless RK4 after the first feedback sessions.
+
+The detailed sequence and feedback questions are in [ARDUPILOT.md](ARDUPILOT.md).
