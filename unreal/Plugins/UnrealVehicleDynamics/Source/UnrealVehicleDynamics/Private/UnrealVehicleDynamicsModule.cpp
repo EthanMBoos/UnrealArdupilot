@@ -41,9 +41,6 @@ class FUnrealVehicleDynamicsModule final : public IModuleInterface {
     if (!FParse::Value(FCommandLine::Get(), TEXT("UvdRun="), RunPath)) {
       return;
     }
-    FString BundlePath;
-    FParse::Value(FCommandLine::Get(), TEXT("UvdBundle="), BundlePath);
-
     AActor* Aircraft = World->SpawnActor<AActor>();
     UStaticMeshComponent* Body =
         NewObject<UStaticMeshComponent>(Aircraft, TEXT("AircraftBody"));
@@ -91,7 +88,6 @@ class FUnrealVehicleDynamicsModule final : public IModuleInterface {
     UUvdAircraftComponent* Simulation =
         NewObject<UUvdAircraftComponent>(Aircraft, TEXT("VehicleDynamics"));
     Simulation->RunConfigPath = RunPath;
-    Simulation->BundlePath = BundlePath;
     Simulation->RegisterComponent();
   }
 

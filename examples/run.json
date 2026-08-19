@@ -1,0 +1,26 @@
+{
+  "aircraft": "aircraft/aerosonde.json",
+  "fixed_dt_s": 0.008333333333333333,
+  "origin": {
+    "latitude_deg": 40.2338,
+    "longitude_deg": -111.6585,
+    "altitude_msl_m": 1387.0,
+    "geoid_undulation_m": -17.0,
+    "heading_deg": 0.0
+  },
+  "initial_state": {
+    "position_ned_m": [0.0, 0.0, -500.0],
+    "q_body_to_ned": [0.9994397811691687, 0.0, 0.03346825087339363, 0.0],
+    "velocity_body_mps": [24.943992144305906, 0.009134035851991202, 1.6724749548138476],
+    "omega_body_radps": [0.0, 0.0, 0.0]
+  },
+  "wind_ned_mps": [0.0, 0.0, 0.0],
+  "trim": {
+    "aileron": 0.024315174205638175,
+    "elevator": -0.6556808305509649,
+    "rudder": -0.0023998511432052733,
+    "throttle": 0.7747222350892338
+  },
+  "controller": {"udp_port": 9002, "control_port": 9003},
+  "cesium": {"tileset_asset_id": 1}
+}

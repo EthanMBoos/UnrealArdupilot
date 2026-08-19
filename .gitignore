@@ -11,3 +11,4 @@ __pycache__/
 /unreal/Saved/
 /unreal/Plugins/*/Binaries/
 /unreal/Plugins/*/Intermediate/
+/unreal/cesium-request-cache*.sqlite*

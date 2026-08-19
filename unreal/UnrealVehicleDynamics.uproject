@@ -18,7 +18,7 @@
     {
       "Name": "CesiumForUnreal",
       "Enabled": true,
-      "Optional": true
+      "Optional": false
     }
   ]
 }

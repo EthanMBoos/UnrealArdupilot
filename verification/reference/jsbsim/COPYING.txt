@@ -1,7 +1,0 @@
-This offline fixture is derived from the BYU MAVSim educational Aerosonde
-parameters and is distributed under GPL-3.0. The upstream license is:
-https://github.com/byu-magicc/mavsim_public/blob/a8489bbc30ab9e746dccac8ac614ab2f8acac6bb/LICENSE
-
-It is deliberately outside all CMake install targets and future Unreal package
-inputs. JSBSim itself remains a separately installed LGPL-2.1 tool.
-
