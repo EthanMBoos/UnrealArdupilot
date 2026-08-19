@@ -46,6 +46,10 @@ struct ControllerConfig {
   double startup_timeout_s{120.0};
   double packet_timeout_s{10.0};
   double warmup_s{10.0};
+  bool release_on_readiness{false};
+  std::uint16_t control_port{9003};
+  double readiness_timeout_s{45.0};
+  std::uint64_t stable_pwm_frames{30};
 };
 
 struct ScheduledInput {

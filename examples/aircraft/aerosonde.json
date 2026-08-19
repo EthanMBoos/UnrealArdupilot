@@ -33,7 +33,7 @@
   },
   "channel_map": [
     {"channel": 1, "function": "aileron", "pwm_min": 1000, "pwm_trim": 1500, "pwm_max": 2000, "reversed": false},
-    {"channel": 2, "function": "elevator", "pwm_min": 1000, "pwm_trim": 1500, "pwm_max": 2000, "reversed": false},
+    {"channel": 2, "function": "elevator", "pwm_min": 1000, "pwm_trim": 1500, "pwm_max": 2000, "reversed": true},
     {"channel": 3, "function": "throttle", "pwm_min": 1000, "pwm_trim": 1000, "pwm_max": 2000, "reversed": false},
     {"channel": 4, "function": "rudder", "pwm_min": 1000, "pwm_trim": 1500, "pwm_max": 2000, "reversed": false}
   ],

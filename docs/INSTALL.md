@@ -59,6 +59,7 @@ build/uvd unreal examples/runs/unreal_smoke.json
 python3 verification/unreal_u0.py --uvd build/uvd
 python3 verification/unreal_u1.py --uvd build/uvd
 python3 verification/unreal_u2.py --uvd build/uvd
+python3 verification/unreal_u3.py --uvd build/uvd
 ```
 
 The command opens a simple aircraft and chase camera, applies scripted controls through Chaos at
@@ -92,9 +93,11 @@ build/uvd sitl examples/runs/unreal_u2.json
 ```
 
 The short U2 case consumes and records 240 real ArduPlane PWM frames while holding the aircraft at
-its scripted trim command. It proves the live Docker-to-Unreal lockstep transport, not flight
-readiness: mode, arming, estimator health, and release criteria remain U3 work. Cesium is not needed
-for this local dynamics case; it remains required for G0 terrain evidence.
+its scripted trim command. The U3 verifier then checks FBWA mode, arming, GPS/EKF health, parameter
+readback, release at a unique PWM boundary, a 60-second air-start flight, and replay of the accepted
+commands through headless RK4. ArduPlane is force-armed only after those explicit readiness checks;
+that policy is written into `controller/session.json`. Cesium is not needed for these local dynamics
+cases; it remains required for G0 terrain evidence.
 
 ## C++ editor setup
 

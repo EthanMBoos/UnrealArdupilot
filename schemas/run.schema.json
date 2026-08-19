@@ -118,7 +118,11 @@
         "udp_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
         "startup_timeout_s": {"type": "number", "exclusiveMinimum": 0},
         "packet_timeout_s": {"type": "number", "exclusiveMinimum": 0},
-        "warmup_s": {"type": "number", "minimum": 0}
+        "warmup_s": {"type": "number", "minimum": 0},
+        "release": {"enum": ["timed", "readiness"]},
+        "control_port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+        "readiness_timeout_s": {"type": "number", "exclusiveMinimum": 0},
+        "stable_pwm_frames": {"type": "integer", "minimum": 1}
       }
     }
   }

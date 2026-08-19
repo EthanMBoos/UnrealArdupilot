@@ -14,16 +14,16 @@
   },
   "atmosphere": {"kind": "isa", "wind_ned_mps": [0.0, 0.0, 0.0]},
   "initial_state": {
-    "position_ned_m": [0.0, 0.0, 0.0],
-    "q_body_to_ned": [1.0, 0.0, 0.0, 0.0],
-    "velocity_body_mps": [25.0, 0.0, 0.0],
+    "position_ned_m": [0.0, 0.0, -500.0],
+    "q_body_to_ned": [0.9994397811691687, 0.0, 0.03346825087339363, 0.0],
+    "velocity_body_mps": [24.943992144305906, 0.009134035851991202, 1.6724749548138476],
     "omega_body_radps": [0.0, 0.0, 0.0]
   },
   "controls": {
     "input_boundary": "aircraft_command",
     "mode": "absolute",
     "final": "hold",
-    "schedule": [{"apply_tick": 0, "values": {"aileron": 0.0, "elevator": -0.08, "rudder": 0.0, "throttle": 0.55}}]
+    "schedule": [{"apply_tick": 0, "values": {"aileron": 0.024315174205638175, "elevator": -0.6556808305509649, "rudder": -0.0023998511432052733, "throttle": 0.7747222350892338}}]
   },
   "controller": {
     "kind": "ardupilot_json",
@@ -32,8 +32,12 @@
     "udp_port": 9002,
     "startup_timeout_s": 120.0,
     "packet_timeout_s": 10.0,
-    "warmup_s": 10.0
+    "warmup_s": 10.0,
+    "release": "readiness",
+    "control_port": 9003,
+    "readiness_timeout_s": 60.0,
+    "stable_pwm_frames": 30
   },
-  "stop": {"duration_s": 30.0},
+  "stop": {"duration_s": 60.0},
   "output_root": "../../runs"
 }

@@ -119,7 +119,11 @@ struct FUvdAircraftRuntime {
   double StartupTimeoutS = 120.0;
   double PacketTimeoutS = 10.0;
   uint64 WarmupTicks = 0;
+  bool ReleaseOnReadiness = false;
+  uint16 ControlPort = 9003;
+  uint64 RequiredStablePwmFrames = 30;
   FSocket* ControllerSocket = nullptr;
+  FSocket* ControlSocket = nullptr;
   TSharedPtr<FInternetAddr> ControllerEndpoint;
   bool HasAcceptedFrame = false;
   bool HasCachedReply = false;
@@ -132,6 +136,10 @@ struct FUvdAircraftRuntime {
   uint64 MalformedFrames = 0;
   uint64 GapFrames = 0;
   uint64 StaleFrames = 0;
+  bool ReleaseRequested = false;
+  bool ControllerReleased = false;
+  uint64 StablePwmFrames = 0;
+  uint64 ReleaseTick = std::numeric_limits<uint64>::max();
   uvd::RigidBodyState IntervalStartState;
 };
 
@@ -487,17 +495,82 @@ bool OpenControllerSocket(FUvdAircraftRuntime& Runtime) {
   UE_LOG(LogUvdAircraft, Display,
          TEXT("Listening for controller PWM on UDP %u"),
          Runtime.ControllerPort);
+  if (Runtime.ReleaseOnReadiness) {
+    Runtime.ControlSocket =
+        FUdpSocketBuilder(TEXT("UnrealVehicleDynamics release control"))
+            .AsNonBlocking()
+            .AsReusable()
+            .BoundToPort(Runtime.ControlPort)
+            .WithReceiveBufferSize(1024);
+    if (!Runtime.ControlSocket) {
+      UE_LOG(LogUvdAircraft, Error,
+             TEXT("Could not bind controller control UDP port %u"),
+             Runtime.ControlPort);
+      Runtime.ControllerSocket->Close();
+      ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
+          ->DestroySocket(Runtime.ControllerSocket);
+      Runtime.ControllerSocket = nullptr;
+      return false;
+    }
+    UE_LOG(LogUvdAircraft, Display,
+           TEXT("Waiting for controller readiness on UDP %u"),
+           Runtime.ControlPort);
+  }
   return true;
 }
 
 void CloseControllerSocket(FUvdAircraftRuntime& Runtime) {
-  if (!Runtime.ControllerSocket) {
-    return;
+  if (Runtime.ControlSocket) {
+    Runtime.ControlSocket->Close();
+    ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
+        ->DestroySocket(Runtime.ControlSocket);
+    Runtime.ControlSocket = nullptr;
   }
-  Runtime.ControllerSocket->Close();
-  ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
-      ->DestroySocket(Runtime.ControllerSocket);
-  Runtime.ControllerSocket = nullptr;
+  if (Runtime.ControllerSocket) {
+    Runtime.ControllerSocket->Close();
+    ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)
+        ->DestroySocket(Runtime.ControllerSocket);
+    Runtime.ControllerSocket = nullptr;
+  }
+}
+
+bool PollControllerRelease(FUvdAircraftRuntime& Runtime) {
+  if (!Runtime.ReleaseOnReadiness || !Runtime.ControlSocket) {
+    return true;
+  }
+  uint32 PendingBytes = 0;
+  while (Runtime.ControlSocket->HasPendingData(PendingBytes)) {
+    uint8 Data[64];
+    int32 BytesRead = 0;
+    TSharedRef<FInternetAddr> Sender =
+        ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->CreateInternetAddr();
+    if (!Runtime.ControlSocket->RecvFrom(
+            Data,
+            FMath::Min<int32>(static_cast<int32>(PendingBytes),
+                              static_cast<int32>(sizeof(Data))),
+            BytesRead, *Sender)) {
+      break;
+    }
+    const FUTF8ToTCHAR Converted(reinterpret_cast<const ANSICHAR*>(Data),
+                                 BytesRead);
+    const FString Command =
+        FString(Converted.Length(), Converted.Get()).TrimStartAndEnd();
+    if (Command == TEXT("release")) {
+      Runtime.ReleaseRequested = true;
+    } else if (Command == TEXT("fail")) {
+      Runtime.FailureCode.store(11);
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ControllerPwmIsReleaseReady(const FUvdAircraftRuntime& Runtime,
+                                 const uvd::AircraftCommand& Command) {
+  return FMath::Abs(Command.aileron) <= 0.9 &&
+         FMath::Abs(Command.elevator) <= 0.9 &&
+         FMath::Abs(Command.rudder) <= 0.9 &&
+         FMath::Abs(Command.throttle - Runtime.Command.throttle) <= 0.25;
 }
 
 bool MapPwmCommand(const FUvdAircraftRuntime& Runtime, const uint8* Data,
@@ -852,6 +925,8 @@ FString FailureReason(int32 FailureCode) {
       return TEXT("controller_stale_frame");
     case 10:
       return TEXT("controller_rate_mismatch");
+    case 11:
+      return TEXT("controller_readiness_failure");
     default:
       return TEXT("completed");
   }
@@ -1040,6 +1115,15 @@ bool UUvdAircraftComponent::LoadRun() {
         Controller->GetNumberField(TEXT("packet_timeout_s"));
     Runtime->WarmupTicks = static_cast<uint64>(FMath::RoundToDouble(
         Controller->GetNumberField(TEXT("warmup_s")) / Runtime->FixedDtS));
+    Runtime->ReleaseOnReadiness =
+        Controller->HasField(TEXT("release")) &&
+        Controller->GetStringField(TEXT("release")) == TEXT("readiness");
+    if (Runtime->ReleaseOnReadiness) {
+      Runtime->ControlPort =
+          static_cast<uint16>(Controller->GetNumberField(TEXT("control_port")));
+      Runtime->RequiredStablePwmFrames = static_cast<uint64>(
+          Controller->GetNumberField(TEXT("stable_pwm_frames")));
+    }
   }
 
   const TSharedPtr<FJsonObject> Controls =
@@ -1261,6 +1345,8 @@ void UUvdAircraftComponent::FinishRun() {
        Runtime->LastFrameRateHz == ExpectedControllerRateHz &&
        Runtime->MalformedFrames == 0 && Runtime->GapFrames == 0 &&
        Runtime->StaleFrames == 0);
+  const bool ControllerReleasePassed =
+      !Runtime->ReleaseOnReadiness || Runtime->ControllerReleased;
   const uint64 PhysicsStepsDuringHitch =
       Runtime->HitchEndStep >= Runtime->HitchStartStep
           ? Runtime->HitchEndStep - Runtime->HitchStartStep
@@ -1286,7 +1372,7 @@ void UUvdAircraftComponent::FinishRun() {
       BodyConfigurationPassed && MechanicsResponsePassed &&
       CommandAccountingPassed && HitchPassed && EvidenceComplete &&
       EvidenceFilesWritten && ControllerTransportPassed &&
-      ControllerEvidenceWritten;
+      ControllerEvidenceWritten && ControllerReleasePassed;
   const FString StopReason = FailureCode != 0 ? FailureReason(FailureCode)
                              : Passed         ? TEXT("completed")
                                               : TEXT("acceptance_failure");
@@ -1365,6 +1451,18 @@ void UUvdAircraftComponent::FinishRun() {
                           static_cast<double>(Runtime->LastFrameCount));
   Metrics->SetNumberField(TEXT("last_controller_rate_hz"),
                           Runtime->LastFrameRateHz);
+  Metrics->SetBoolField(TEXT("controller_release_required"),
+                        Runtime->ReleaseOnReadiness);
+  Metrics->SetBoolField(TEXT("controller_release_requested"),
+                        Runtime->ReleaseRequested);
+  Metrics->SetBoolField(TEXT("controller_released"),
+                        Runtime->ControllerReleased);
+  Metrics->SetNumberField(TEXT("stable_controller_pwm_frames"),
+                          static_cast<double>(Runtime->StablePwmFrames));
+  Metrics->SetNumberField(TEXT("controller_release_tick"),
+                          Runtime->ControllerReleased
+                              ? static_cast<double>(Runtime->ReleaseTick)
+                              : -1.0);
 
   TSharedPtr<FJsonObject> BodyConfiguration = MakeShared<FJsonObject>();
   BodyConfiguration->SetNumberField(TEXT("target_mass_kg"),
@@ -1548,7 +1646,33 @@ void UUvdAircraftComponent::AsyncPhysicsTickComponent(float DeltaTime,
       Runtime->Finished.store(true, std::memory_order_release);
       return;
     }
-    if (Runtime->StepIndex >= Runtime->WarmupTicks) {
+    if (!PollControllerRelease(*Runtime)) {
+      Runtime->FinalState = State;
+      Runtime->Finished.store(true, std::memory_order_release);
+      return;
+    }
+    if (Runtime->ReleaseOnReadiness) {
+      if (ControllerPwmIsReleaseReady(*Runtime, ControllerCommand)) {
+        ++Runtime->StablePwmFrames;
+      } else {
+        Runtime->StablePwmFrames = 0;
+      }
+      if (!Runtime->ControllerReleased && Runtime->ReleaseRequested &&
+          Runtime->StepIndex >= Runtime->WarmupTicks &&
+          Runtime->StablePwmFrames >= Runtime->RequiredStablePwmFrames) {
+        Runtime->ControllerReleased = true;
+        Runtime->ReleaseTick = Runtime->StepIndex;
+        UE_LOG(LogUvdAircraft, Display,
+               TEXT("Released controller PWM at interval %llu"),
+               Runtime->ReleaseTick);
+      }
+    } else if (Runtime->StepIndex >= Runtime->WarmupTicks) {
+      Runtime->ControllerReleased = true;
+      if (Runtime->ReleaseTick == std::numeric_limits<uint64>::max()) {
+        Runtime->ReleaseTick = Runtime->StepIndex;
+      }
+    }
+    if (Runtime->ControllerReleased) {
       Runtime->Command = ControllerCommand;
     }
     Runtime->IntervalStartState = State;

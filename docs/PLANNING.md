@@ -264,7 +264,10 @@ logs. The launcher gives the container a host address that reaches Unreal's UDP 
 Docker networking setup may differ between Linux and macOS. The Unreal plugin owns the JSON socket
 and physics session. A narrow host control channel lets the wrapper request `Release` or `Fail`; the
 plugin applies that request only at the next unique PWM boundary. Release requires the expected
-mode, armed state, healthy estimator, verified parameters, and stable PWM near trim.
+mode, armed state, healthy estimator, verified parameters, and 30 consecutive nonsaturated PWM
+frames at the requested flight throttle. The local U3 case force-arms only after the explicit
+readiness checks pass because ArduPlane's redundant DCM pre-arm check was nondeterministic against
+the external JSON state; the saved session evidence records that policy.
 
 The ArduPlane `--rate` value must equal the reciprocal physics timestep. The first JSON discovery
 packet may advertise the backend's 1200 Hz constructor default; release waits until later packets
@@ -385,7 +388,7 @@ ticks and signal IDs. A different clock needs an explicit resampling rule.
 | U0 | Unreal mechanics and pacing probe | full local macOS suite passes; Linux repeat remains for release evidence |
 | U1 | aircraft in Unreal | matched-state wrench and timestep-refinement suite passes locally; Linux repeat remains |
 | U2 | full Chaos and UDP exchange | live 240-frame Unreal/ArduPlane exchange and five-case local fault suite pass; Linux repeat remains |
-| U3 | ArduPilot closed loop | pinned container and launcher pass independently; closed loop remains |
+| U3 | ArduPilot closed loop | readiness-gated 60 s FBWA flight and cross-backend command replay pass locally; Linux repeat remains |
 
 The end-to-end example is:
 

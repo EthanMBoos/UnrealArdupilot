@@ -14,7 +14,7 @@ import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-IMAGE = "uvd-ardupilot:e0652af"
+IMAGE = "uvd-ardupilot:e0652af-u3"
 MAGIC_BY_SIZE = {40: (18458, 16), 72: (29569, 32)}
 
 

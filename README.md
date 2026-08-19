@@ -98,6 +98,7 @@ build/uvd unreal examples/runs/unreal_smoke.json
 python3 verification/unreal_u0.py --uvd build/uvd
 python3 verification/unreal_u1.py --uvd build/uvd
 python3 verification/unreal_u2.py --uvd build/uvd
+python3 verification/unreal_u3.py --uvd build/uvd
 ```
 
 The smoke command opens a visible air-started aircraft, runs scripted controls
@@ -129,8 +130,10 @@ The headless fixed-wing path, finite UE 5.8/Chaos open-loop smoke run, and local
 U0 mechanics/timing and U1 model/trajectory suites are implemented. The
 ArduPlane container now also completes a live 240-frame lockstep exchange with
 Unreal, and the local U2 suite verifies duplicate, gap, stale, malformed, and
-timeout handling in the real plugin. Cesium placement, U3 readiness/arming/flight,
-and the Linux acceptance repeat remain before the project is a proven v1. See
+timeout handling in the real plugin. A readiness-gated local U3 flight now arms
+ArduPlane in FBWA, releases stable PWM into Chaos, and passes a cross-backend
+command replay. Cesium placement and the Linux acceptance repeat remain before
+the project is a proven v1. See
 [V1.md](docs/V1.md) for the exact evidence gate.
 
 ## License

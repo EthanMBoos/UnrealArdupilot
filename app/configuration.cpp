@@ -560,7 +560,19 @@ RunConfig load_run(const fs::path& raw_path) {
         .startup_timeout_s = controller.at("startup_timeout_s"),
         .packet_timeout_s = controller.at("packet_timeout_s"),
         .warmup_s = controller.at("warmup_s"),
+        .release_on_readiness =
+            controller.value("release", std::string("timed")) == "readiness",
+        .control_port =
+            static_cast<std::uint16_t>(controller.value("control_port", 9003)),
+        .readiness_timeout_s = controller.value("readiness_timeout_s", 45.0),
+        .stable_pwm_frames = static_cast<std::uint64_t>(
+            controller.value("stable_pwm_frames", 30)),
     };
+    if (run.controller->release_on_readiness &&
+        run.controller->control_port == run.controller->udp_port) {
+      throw std::runtime_error(
+          "controller control_port must differ from udp_port");
+    }
     const double rate_hz = 1.0 / run.dt;
     if (std::abs(rate_hz - std::round(rate_hz)) > 1e-9) {
       throw std::runtime_error(

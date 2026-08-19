@@ -17,9 +17,13 @@ ENV PATH="/opt/ardupilot-venv/bin:${PATH}"
 RUN cd /ardupilot && ./waf configure --board sitl && ./waf plane
 
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libexpat1 libpython3.12 libstdc++6 && rm -rf /var/lib/apt/lists/*
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libexpat1 libpython3.12 libstdc++6 python3-minimal && \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=build /ardupilot/build/sitl/bin/arduplane /opt/ardupilot/arduplane
+COPY --from=build /opt/ardupilot-venv /opt/ardupilot-venv
 COPY ardupilot/uvd.parm /opt/ardupilot/uvd.parm
 COPY ardupilot/entrypoint.sh /opt/ardupilot/entrypoint.sh
+COPY ardupilot/session.py /opt/ardupilot/session.py
 ENTRYPOINT ["/opt/ardupilot/entrypoint.sh"]

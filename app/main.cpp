@@ -272,7 +272,7 @@ fs::path unreal_preflight(bool require_sitl_dependencies) {
 }
 
 void ensure_ardupilot_image() {
-  constexpr std::string_view image = "uvd-ardupilot:e0652af";
+  constexpr std::string_view image = "uvd-ardupilot:e0652af-u3";
   if (run_process({"docker", "image", "inspect", std::string(image)},
                   "/dev/null") == 0) {
     return;
@@ -413,7 +413,20 @@ void run_sitl(const RunConfig& run,
        "UVD_HOME=" + controller_home(run), "-e",
        "UVD_RATE_HZ=" + std::to_string(static_cast<unsigned int>(
                             std::llround(1.0 / run.dt))),
-       "uvd-ardupilot:e0652af"});
+       "uvd-ardupilot:e0652af-u3"});
+  if (run.controller->release_on_readiness) {
+    docker.insert(
+        docker.end() - 1,
+        {"--mount",
+         "type=bind,source=" + fs::absolute(bundle / "controller").string() +
+             ",target=/evidence",
+         "-e", "UVD_SESSION_MODE=closed_loop", "-e",
+         "UVD_CONTROL_PORT=" + std::to_string(run.controller->control_port),
+         "-e",
+         "UVD_READINESS_TIMEOUT_S=" +
+             precise_number(run.controller->readiness_timeout_s),
+         "-e", "UVD_EVIDENCE_PATH=/evidence/session.json"});
+  }
 
   pid_t controller{};
   try {
@@ -448,6 +461,24 @@ void run_sitl(const RunConfig& run,
     manifest["status"] = "failed";
     manifest["stop_reason"] =
         finished == unreal ? "unreal_exit_failure" : "controller_exit_failure";
+  }
+  if (run.controller->release_on_readiness) {
+    try {
+      const Json session = parse_strict(bundle / "controller/session.json");
+      manifest["controller_session"] = session;
+      if (!session.value("passed", false) ||
+          !session.value("released", false) ||
+          session.value("mode", std::string{}) != run.controller->mode ||
+          !session.value("armed", false) ||
+          !session.value("ekf_healthy", false) ||
+          !session.value("parameters_verified", false)) {
+        manifest["status"] = "failed";
+        manifest["stop_reason"] = "controller_readiness_evidence_failed";
+      }
+    } catch (const std::exception&) {
+      manifest["status"] = "failed";
+      manifest["stop_reason"] = "missing_controller_readiness_evidence";
+    }
   }
   write_text(bundle / "manifest.json", manifest.dump(2) + "\n");
   if (manifest.value("status", std::string{}) != "complete") {
