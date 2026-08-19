@@ -5,6 +5,9 @@
 #include <numbers>
 
 #include "Chaos/ChaosEngineInterface.h"
+#if UVD_WITH_CESIUM
+#include "CesiumGeoreference.h"
+#endif
 #include "Common/UdpSocketBuilder.h"
 #include "Components/PrimitiveComponent.h"
 #include "Dom/JsonObject.h"
@@ -140,6 +143,20 @@ struct FUvdAircraftRuntime {
   bool ControllerReleased = false;
   uint64 StablePwmFrames = 0;
   uint64 ReleaseTick = std::numeric_limits<uint64>::max();
+  bool GeospatialEnabled = false;
+  bool GeospatialPassed = true;
+  double StartingHeadingDeg = 0.0;
+  double GeospatialOriginErrorM = 0.0;
+  double GeospatialRoundTripErrorM = 0.0;
+  double GeospatialAxisErrorCm = 0.0;
+  double GeospatialSpawnErrorCm = 0.0;
+  double GeospatialHeadingErrorDeg = 0.0;
+  uvd::GeodeticPosition OriginGeodetic;
+  uvd::GeodeticPosition InitialGeodetic;
+  FVector InitialWorldPositionCm = FVector::ZeroVector;
+#if UVD_WITH_CESIUM
+  ACesiumGeoreference* Georeference = nullptr;
+#endif
   uvd::RigidBodyState IntervalStartState;
 };
 
@@ -396,6 +413,15 @@ TArray<TSharedPtr<FJsonValue>> JsonVector(const uvd::Vector3& Value) {
   return {MakeShared<FJsonValueNumber>(Value.x()),
           MakeShared<FJsonValueNumber>(Value.y()),
           MakeShared<FJsonValueNumber>(Value.z())};
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonGeodetic(
+    const uvd::GeodeticPosition& Position) {
+  return {
+      MakeShared<FJsonValueNumber>(Position.longitude_deg),
+      MakeShared<FJsonValueNumber>(Position.latitude_deg),
+      MakeShared<FJsonValueNumber>(Position.ellipsoid_height_m),
+  };
 }
 
 TArray<TSharedPtr<FJsonValue>> JsonMatrix(const uvd::Matrix3& Value) {
@@ -953,7 +979,8 @@ void UUvdAircraftComponent::BeginPlay() {
     return;
   }
   Runtime = new FUvdAircraftRuntime();
-  if (!LoadRun() || !LoadAircraft() || !ConfigureBody()) {
+  if (!LoadRun() || !LoadAircraft() || !ConfigureBody() ||
+      !ConfigureGeospatial()) {
     Runtime->FailureCode.store(4);
     Runtime->Finished.store(true, std::memory_order_release);
     return;
@@ -1064,6 +1091,19 @@ bool UUvdAircraftComponent::LoadRun() {
       Root->GetObjectField(TEXT("clock"))->GetNumberField(TEXT("fixed_dt_s"));
   const TSharedPtr<FJsonObject> World = Root->GetObjectField(TEXT("world"));
   OriginAltitudeMslM = World->GetNumberField(TEXT("origin_altitude_msl_m"));
+  const double GeoidUndulationM =
+      World->HasField(TEXT("geoid_undulation_m"))
+          ? World->GetNumberField(TEXT("geoid_undulation_m"))
+          : 0.0;
+  Runtime->OriginGeodetic = {
+      .latitude_deg = World->GetNumberField(TEXT("origin_latitude_deg")),
+      .longitude_deg = World->GetNumberField(TEXT("origin_longitude_deg")),
+      .ellipsoid_height_m =
+          uvd::ellipsoid_height_from_msl(OriginAltitudeMslM, GeoidUndulationM),
+  };
+  Runtime->StartingHeadingDeg =
+      World->GetNumberField(TEXT("starting_heading_deg"));
+  Runtime->GeospatialEnabled = World->HasField(TEXT("cesium"));
   WindNedMps = ToUnreal(
       Vector3(Root->GetObjectField(TEXT("atmosphere")), TEXT("wind_ned_mps")));
   const TSharedPtr<FJsonObject> Initial =
@@ -1267,6 +1307,81 @@ bool UUvdAircraftComponent::ConfigureBody() {
   return true;
 }
 
+bool UUvdAircraftComponent::ConfigureGeospatial() {
+  Runtime->InitialWorldPositionCm =
+      ToUnreal(NedPositionToUnrealCm(Runtime->InitialState.position_ned_m));
+  if (!Runtime->GeospatialEnabled) {
+    return true;
+  }
+#if !UVD_WITH_CESIUM
+  UE_LOG(LogUvdAircraft, Error,
+         TEXT("Run requires Cesium for Unreal, but the plugin was not found at "
+              "build time"));
+  return false;
+#else
+  Runtime->Georeference =
+      ACesiumGeoreference::GetDefaultGeoreference(GetWorld());
+  if (!Runtime->Georeference) {
+    UE_LOG(LogUvdAircraft, Error,
+           TEXT("Could not create the Cesium georeference"));
+    return false;
+  }
+  Runtime->Georeference->SetActorTransform(FTransform::Identity);
+  Runtime->Georeference->SetScale(100.0);
+  Runtime->Georeference->SetOriginPlacement(
+      EOriginPlacement::CartographicOrigin);
+  Runtime->Georeference->SetOriginLongitudeLatitudeHeight(
+      FVector(Runtime->OriginGeodetic.longitude_deg,
+              Runtime->OriginGeodetic.latitude_deg,
+              Runtime->OriginGeodetic.ellipsoid_height_m));
+
+  const FVector ObservedOrigin =
+      Runtime->Georeference->GetOriginLongitudeLatitudeHeight();
+  const uvd::GeodeticPosition ObservedOriginGeodetic{
+      .latitude_deg = ObservedOrigin.Y,
+      .longitude_deg = ObservedOrigin.X,
+      .ellipsoid_height_m = ObservedOrigin.Z,
+  };
+  Runtime->GeospatialOriginErrorM =
+      uvd::ned_from_geodetic(Runtime->OriginGeodetic, ObservedOriginGeodetic)
+          .norm();
+  Runtime->InitialGeodetic = uvd::geodetic_from_ned(
+      Runtime->OriginGeodetic, Runtime->InitialState.position_ned_m);
+  Runtime->InitialWorldPositionCm =
+      Runtime->Georeference->TransformLongitudeLatitudeHeightPositionToUnreal(
+          FVector(Runtime->InitialGeodetic.longitude_deg,
+                  Runtime->InitialGeodetic.latitude_deg,
+                  Runtime->InitialGeodetic.ellipsoid_height_m));
+  const FVector RoundTrip =
+      Runtime->Georeference->TransformUnrealPositionToLongitudeLatitudeHeight(
+          Runtime->InitialWorldPositionCm);
+  Runtime->GeospatialRoundTripErrorM =
+      (uvd::ned_from_geodetic(Runtime->OriginGeodetic,
+                              {.latitude_deg = RoundTrip.Y,
+                               .longitude_deg = RoundTrip.X,
+                               .ellipsoid_height_m = RoundTrip.Z}) -
+       Runtime->InitialState.position_ned_m)
+          .norm();
+
+  const auto AxisPosition = [&](const uvd::Vector3& PositionNedM) {
+    const uvd::GeodeticPosition Position =
+        uvd::geodetic_from_ned(Runtime->OriginGeodetic, PositionNedM);
+    return Runtime->Georeference
+        ->TransformLongitudeLatitudeHeightPositionToUnreal(
+            FVector(Position.longitude_deg, Position.latitude_deg,
+                    Position.ellipsoid_height_m));
+  };
+  Runtime->GeospatialAxisErrorCm = FMath::Max3(
+      (AxisPosition({100.0, 0.0, 0.0}) - FVector(0.0, -10000.0, 0.0)).Length(),
+      (AxisPosition({0.0, 100.0, 0.0}) - FVector(10000.0, 0.0, 0.0)).Length(),
+      (AxisPosition({0.0, 0.0, 100.0}) - FVector(0.0, 0.0, -10000.0)).Length());
+  Runtime->GeospatialPassed = Runtime->GeospatialOriginErrorM <= 1e-6 &&
+                              Runtime->GeospatialRoundTripErrorM <= 1e-6 &&
+                              Runtime->GeospatialAxisErrorCm <= 1e-2;
+  return Runtime->GeospatialPassed;
+#endif
+}
+
 void UUvdAircraftComponent::SetInitialState() {
   const uvd::RigidBodyState& State = Runtime->InitialState;
   const uvd::Matrix3 Rotation =
@@ -1278,11 +1393,29 @@ void UUvdAircraftComponent::SetInitialState() {
   const uvd::Vector3 OmegaUnreal =
       Rotation * FrdAxialToUnrealBody(State.omega_body_radps);
   UpdatedPrimitive->SetWorldLocationAndRotation(
-      ToUnreal(NedPositionToUnrealCm(State.position_ned_m)),
-      ToUnrealQuaternion(Rotation), false, nullptr,
-      ETeleportType::TeleportPhysics);
+      Runtime->InitialWorldPositionCm, ToUnrealQuaternion(Rotation), false,
+      nullptr, ETeleportType::TeleportPhysics);
   UpdatedPrimitive->SetPhysicsLinearVelocity(ToUnreal(VelocityUnrealCmps));
   UpdatedPrimitive->SetPhysicsAngularVelocityInRadians(ToUnreal(OmegaUnreal));
+  if (Runtime->GeospatialEnabled) {
+    Runtime->GeospatialSpawnErrorCm =
+        (UpdatedPrimitive->GetComponentLocation() -
+         Runtime->InitialWorldPositionCm)
+            .Length();
+    const uvd::RigidBodyState Observed = UnrealBodyStateToCore(
+        ToUvd(UpdatedPrimitive->GetComponentLocation()),
+        RotationMatrix(UpdatedPrimitive->GetComponentTransform()),
+        uvd::Vector3::Zero(), uvd::Vector3::Zero());
+    const uvd::Matrix3 ObservedRotation =
+        Observed.q_body_to_ned.toRotationMatrix();
+    const double ObservedHeadingDeg = FMath::RadiansToDegrees(
+        FMath::Atan2(ObservedRotation(1, 0), ObservedRotation(0, 0)));
+    Runtime->GeospatialHeadingErrorDeg = FMath::Abs(
+        FMath::UnwindDegrees(ObservedHeadingDeg - Runtime->StartingHeadingDeg));
+    Runtime->GeospatialPassed = Runtime->GeospatialPassed &&
+                                Runtime->GeospatialSpawnErrorCm <= 1e-2 &&
+                                Runtime->GeospatialHeadingErrorDeg <= 1e-6;
+  }
 }
 
 void UUvdAircraftComponent::FinishRun() {
@@ -1347,6 +1480,8 @@ void UUvdAircraftComponent::FinishRun() {
        Runtime->StaleFrames == 0);
   const bool ControllerReleasePassed =
       !Runtime->ReleaseOnReadiness || Runtime->ControllerReleased;
+  const bool GeospatialPassed =
+      !Runtime->GeospatialEnabled || Runtime->GeospatialPassed;
   const uint64 PhysicsStepsDuringHitch =
       Runtime->HitchEndStep >= Runtime->HitchStartStep
           ? Runtime->HitchEndStep - Runtime->HitchStartStep
@@ -1372,7 +1507,7 @@ void UUvdAircraftComponent::FinishRun() {
       BodyConfigurationPassed && MechanicsResponsePassed &&
       CommandAccountingPassed && HitchPassed && EvidenceComplete &&
       EvidenceFilesWritten && ControllerTransportPassed &&
-      ControllerEvidenceWritten && ControllerReleasePassed;
+      ControllerEvidenceWritten && ControllerReleasePassed && GeospatialPassed;
   const FString StopReason = FailureCode != 0 ? FailureReason(FailureCode)
                              : Passed         ? TEXT("completed")
                                               : TEXT("acceptance_failure");
@@ -1463,6 +1598,28 @@ void UUvdAircraftComponent::FinishRun() {
                           Runtime->ControllerReleased
                               ? static_cast<double>(Runtime->ReleaseTick)
                               : -1.0);
+  Metrics->SetBoolField(TEXT("geospatial_enabled"), Runtime->GeospatialEnabled);
+  Metrics->SetBoolField(TEXT("geospatial_passed"), GeospatialPassed);
+
+  TSharedPtr<FJsonObject> Geospatial = MakeShared<FJsonObject>();
+  Geospatial->SetBoolField(TEXT("enabled"), Runtime->GeospatialEnabled);
+  Geospatial->SetBoolField(TEXT("passed"), GeospatialPassed);
+  Geospatial->SetArrayField(TEXT("origin_longitude_latitude_height"),
+                            JsonGeodetic(Runtime->OriginGeodetic));
+  Geospatial->SetArrayField(TEXT("initial_longitude_latitude_height"),
+                            JsonGeodetic(Runtime->InitialGeodetic));
+  Geospatial->SetNumberField(TEXT("starting_heading_deg"),
+                             Runtime->StartingHeadingDeg);
+  Geospatial->SetNumberField(TEXT("origin_error_m"),
+                             Runtime->GeospatialOriginErrorM);
+  Geospatial->SetNumberField(TEXT("round_trip_error_m"),
+                             Runtime->GeospatialRoundTripErrorM);
+  Geospatial->SetNumberField(TEXT("axis_error_cm"),
+                             Runtime->GeospatialAxisErrorCm);
+  Geospatial->SetNumberField(TEXT("spawn_error_cm"),
+                             Runtime->GeospatialSpawnErrorCm);
+  Geospatial->SetNumberField(TEXT("heading_error_deg"),
+                             Runtime->GeospatialHeadingErrorDeg);
 
   TSharedPtr<FJsonObject> BodyConfiguration = MakeShared<FJsonObject>();
   BodyConfiguration->SetNumberField(TEXT("target_mass_kg"),
@@ -1527,6 +1684,7 @@ void UUvdAircraftComponent::FinishRun() {
   Report->SetObjectField(TEXT("final_wrench"), Wrench);
   Report->SetObjectField(TEXT("metrics"), Metrics);
   Report->SetObjectField(TEXT("probe"), Probe);
+  Report->SetObjectField(TEXT("geospatial"), Geospatial);
 
   if (!BundlePath.IsEmpty()) {
     const FString ResultsDirectory =
@@ -1557,6 +1715,7 @@ void UUvdAircraftComponent::FinishRun() {
                              static_cast<double>(Runtime->StepIndex));
     Manifest->SetObjectField(TEXT("metrics"), Metrics);
     Manifest->SetObjectField(TEXT("probe"), Probe);
+    Manifest->SetObjectField(TEXT("geospatial"), Geospatial);
     if (!SaveJson(ManifestPath, Manifest)) {
       UE_LOG(LogUvdAircraft, Error, TEXT("Could not update manifest: %s"),
              *ManifestPath);
@@ -1733,4 +1892,5 @@ void UUvdAircraftComponent::AsyncPhysicsTickComponent(float DeltaTime,
 // UnrealBuildTool cannot compile sources outside a module directly. Compile
 // the same controls math into this component instead of maintaining wrappers.
 #include "fixed_wing.cpp"
+#include "geodesy.cpp"
 #include "rigid_body.cpp"

@@ -67,6 +67,7 @@ add_custom_target(uvd_stage_unreal_dependencies ALL
 
 add_library(uvd_core STATIC
   core/src/fixed_wing.cpp
+  core/src/geodesy.cpp
   core/src/rigid_body.cpp)
 target_include_directories(uvd_core PUBLIC core/include)
 target_compile_features(uvd_core PUBLIC cxx_std_23)
@@ -138,6 +139,7 @@ if(UVD_BUILD_TESTS)
   add_test(NAME uvd_validate_unreal_run COMMAND uvd validate ${CMAKE_CURRENT_SOURCE_DIR}/examples/runs/unreal_ardupilot.json)
   add_test(NAME uvd_validate_unreal_smoke COMMAND uvd validate ${CMAKE_CURRENT_SOURCE_DIR}/examples/runs/unreal_smoke.json)
   add_test(NAME uvd_validate_unreal_u0 COMMAND uvd validate ${CMAKE_CURRENT_SOURCE_DIR}/examples/runs/unreal_u0.json)
+  add_test(NAME uvd_validate_unreal_g0 COMMAND uvd validate ${CMAKE_CURRENT_SOURCE_DIR}/examples/runs/unreal_g0.json)
   add_test(NAME uvd_validate_unreal_u2 COMMAND uvd validate ${CMAKE_CURRENT_SOURCE_DIR}/examples/runs/unreal_u2.json)
   add_test(NAME uvd_reject_headless_sitl COMMAND uvd sitl ${CMAKE_CURRENT_SOURCE_DIR}/examples/runs/headless.json --preflight)
   set_tests_properties(uvd_reject_headless_sitl PROPERTIES WILL_FAIL TRUE)

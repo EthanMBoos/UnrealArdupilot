@@ -77,7 +77,13 @@ pid_t spawn_process(const std::vector<std::string>& arguments,
 
 int exit_code_from_status(int status) {
 #if defined(__APPLE__) || defined(__linux__)
-  return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
+  constexpr int kSignalMask = 0x7f;
+  constexpr int kExitCodeShift = 8;
+  constexpr int kExitCodeMask = 0xff;
+  if ((status & kSignalMask) != 0) {
+    return 128;
+  }
+  return (status >> kExitCodeShift) & kExitCodeMask;
 #else
   static_cast<void>(status);
   return 128;
@@ -180,16 +186,28 @@ bool supported_unreal_version(const fs::path& editor) {
   }
 }
 
-bool cesium_228_is_installed(const fs::path& editor) {
+bool cesium_supports_unreal_58(const fs::path& editor) {
   const auto plugin = find_cesium_plugin(editor);
   if (!plugin) {
     return false;
   }
   try {
     const uvd::app::Json descriptor = uvd::app::parse_strict(*plugin);
-    return descriptor.value("VersionName", std::string{}).starts_with("2.28");
+    return descriptor.value("EngineVersion", std::string{}).starts_with("5.8");
   } catch (const std::exception&) {
     return false;
+  }
+}
+
+std::optional<std::string> cesium_plugin_version(const fs::path& editor) {
+  const auto plugin = find_cesium_plugin(editor);
+  if (!plugin) {
+    return std::nullopt;
+  }
+  try {
+    return uvd::app::parse_strict(*plugin).value("VersionName", std::string{});
+  } catch (const std::exception&) {
+    return std::nullopt;
   }
 }
 
@@ -212,15 +230,15 @@ void build_unreal_project(const fs::path& editor) {
 #else
   const std::string platform = "Linux";
 #endif
-  const int result = run_process({script.string(), "UnrealEditor", platform,
-                                  "Development", "-Project=" + project.string(),
-                                  "-WaitMutex", "-NoHotReloadFromIDE"});
+  const int result = run_process(
+      {script.string(), "UnrealVehicleDynamicsEditor", platform, "Development",
+       "-Project=" + project.string(), "-WaitMutex", "-NoHotReloadFromIDE"});
   if (result != 0) {
     throw std::runtime_error("Unreal project build failed");
   }
 }
 
-fs::path unreal_preflight(bool require_sitl_dependencies) {
+fs::path unreal_preflight(bool require_sitl_dependencies, bool require_cesium) {
   const auto editor = find_unreal_editor();
   std::vector<std::string> failures;
   const auto require = [&failures](bool passed, std::string_view name) {
@@ -250,8 +268,11 @@ fs::path unreal_preflight(bool require_sitl_dependencies) {
       run_process({"/usr/bin/xcrun", "clang", "--version"}, "/dev/null") == 0,
       "Xcode compiler");
 #endif
-  if (editor && find_cesium_plugin(*editor)) {
-    std::cout << (cesium_228_is_installed(*editor) ? "pass " : "note ")
+  if (require_cesium) {
+    require(editor && cesium_supports_unreal_58(*editor),
+            "Cesium for Unreal with UE 5.8 support");
+  } else if (editor && find_cesium_plugin(*editor)) {
+    std::cout << (cesium_supports_unreal_58(*editor) ? "pass " : "note ")
               << "Cesium for Unreal (not required for local dynamics)\n";
   } else {
     std::cout << "skip Cesium for Unreal (not required for local dynamics)\n";
@@ -325,7 +346,8 @@ void run_unreal(const RunConfig& run,
         "uvd unreal --transport-probe requires a controller configuration");
   }
 
-  const fs::path editor = unreal_preflight(false);
+  const bool require_cesium = run.json.at("world").contains("cesium");
+  const fs::path editor = unreal_preflight(false, require_cesium);
   if (preflight_only) {
     return;
   }
@@ -356,6 +378,9 @@ void run_unreal(const RunConfig& run,
     manifest["stop_reason"] = "missing_unreal_report";
   }
   manifest["launcher_exit_code"] = exit_code;
+  if (const auto version = cesium_plugin_version(editor); version) {
+    manifest["cesium_for_unreal_version"] = *version;
+  }
   if (exit_code != 0) {
     manifest["status"] = "failed";
     manifest["stop_reason"] = "unreal_exit_failure";
@@ -378,7 +403,8 @@ void run_sitl(const RunConfig& run,
     throw std::runtime_error("uvd sitl requires a controller configuration");
   }
 
-  const fs::path editor = unreal_preflight(true);
+  const bool require_cesium = run.json.at("world").contains("cesium");
+  const fs::path editor = unreal_preflight(true, require_cesium);
   if (preflight_only) {
     return;
   }

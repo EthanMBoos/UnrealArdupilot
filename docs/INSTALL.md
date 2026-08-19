@@ -56,6 +56,7 @@ without launching a run, then launch the finite smoke case:
 ```sh
 build/uvd unreal examples/runs/unreal_smoke.json --preflight
 build/uvd unreal examples/runs/unreal_smoke.json
+python3 verification/unreal_g0.py --uvd build/uvd
 python3 verification/unreal_u0.py --uvd build/uvd
 python3 verification/unreal_u1.py --uvd build/uvd
 python3 verification/unreal_u2.py --uvd build/uvd
@@ -74,9 +75,13 @@ behavior in the real plugin. Cesium and Docker are not required for these tests.
 
 ## Cesium and ArduPlane setup
 
-Install the UE 5.8 build of Cesium for Unreal 2.28.0 before beginning the G0 geospatial work. The
-open-loop smoke run does not need a Cesium ion token. G0 terrain runs will read it from
-`CESIUM_ION_TOKEN`.
+Install a Cesium for Unreal build that declares UE 5.8 support before running G0. [Version
+2.29.0](https://github.com/CesiumGS/cesium-unreal/releases/tag/v2.29.0) is the tested macOS baseline;
+preflight checks engine compatibility rather than requiring that exact patch release.
+`verification/unreal_g0.py` opens the normal Open World twice and compares a
+reference run with the Cesium-enabled run. It checks WGS84 placement, signed geoid conversion,
+cardinal axes, heading, and model-wrench isolation. This coordinate probe does not download terrain
+and does not require an ion token. Future terrain runs will read the token from `CESIUM_ION_TOKEN`.
 
 Install and start Docker Desktop on macOS, or Docker Engine on Linux. The controller transport can
 then be checked independently:
@@ -97,7 +102,7 @@ its scripted trim command. The U3 verifier then checks FBWA mode, arming, GPS/EK
 readback, release at a unique PWM boundary, a 60-second air-start flight, and replay of the accepted
 commands through headless RK4. ArduPlane is force-armed only after those explicit readiness checks;
 that policy is written into `controller/session.json`. Cesium is not needed for these local dynamics
-cases; it remains required for G0 terrain evidence.
+cases; it is used only by the G0 geospatial case.
 
 ## C++ editor setup
 

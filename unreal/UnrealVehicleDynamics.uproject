@@ -3,6 +3,13 @@
   "EngineAssociation": "5.8",
   "Category": "Simulation",
   "Description": "UnrealVehicleDynamics fixed-wing integration test project",
+  "Modules": [
+    {
+      "Name": "UvdHost",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
   "Plugins": [
     {
       "Name": "UnrealVehicleDynamics",

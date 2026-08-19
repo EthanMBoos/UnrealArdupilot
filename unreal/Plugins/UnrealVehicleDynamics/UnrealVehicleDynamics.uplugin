@@ -8,6 +8,13 @@
   "CreatedBy": "UnrealVehicleDynamics contributors",
   "CanContainContent": true,
   "Installed": false,
+  "Plugins": [
+    {
+      "Name": "CesiumForUnreal",
+      "Enabled": true,
+      "Optional": true
+    }
+  ],
   "Modules": [
     {
       "Name": "UnrealVehicleDynamics",

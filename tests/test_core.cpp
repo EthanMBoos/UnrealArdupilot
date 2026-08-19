@@ -99,6 +99,43 @@ TEST_CASE("fixed-size Eigen math and quaternion conventions are consistent") {
   REQUIRE_THAT((roundtrip - rotation).norm(), WithinAbs(0.0, 1e-14));
 }
 
+TEST_CASE("MSL altitude uses signed geoid undulation") {
+  REQUIRE_THAT(uvd::ellipsoid_height_from_msl(100.0, -17.0),
+               WithinAbs(83.0, 1e-15));
+  REQUIRE_THAT(uvd::ellipsoid_height_from_msl(100.0, 31.5),
+               WithinAbs(131.5, 1e-15));
+}
+
+TEST_CASE("WGS84 local NED and geodetic positions round trip") {
+  const uvd::GeodeticPosition origin{
+      .latitude_deg = 40.072842,
+      .longitude_deg = -105.230575,
+      .ellipsoid_height_m = 1584.0,
+  };
+  const uvd::Vector3 position_ned_m{1234.5, -678.25, -321.0};
+  const auto geodetic = uvd::geodetic_from_ned(origin, position_ned_m);
+  const auto round_trip = uvd::ned_from_geodetic(origin, geodetic);
+  REQUIRE_THAT((round_trip - position_ned_m).norm(), WithinAbs(0.0, 1e-6));
+  REQUIRE(geodetic.latitude_deg > origin.latitude_deg);
+  REQUIRE(geodetic.longitude_deg < origin.longitude_deg);
+  REQUIRE(geodetic.ellipsoid_height_m > origin.ellipsoid_height_m);
+}
+
+TEST_CASE("WGS84 NED cardinal directions are not swapped") {
+  const uvd::GeodeticPosition origin{};
+  const auto north =
+      uvd::geodetic_from_ned(origin, uvd::Vector3{100.0, 0.0, 0.0});
+  const auto east =
+      uvd::geodetic_from_ned(origin, uvd::Vector3{0.0, 100.0, 0.0});
+  const auto down =
+      uvd::geodetic_from_ned(origin, uvd::Vector3{0.0, 0.0, 100.0});
+  REQUIRE(north.latitude_deg > 0.0);
+  REQUIRE_THAT(north.longitude_deg, WithinAbs(0.0, 1e-12));
+  REQUIRE(east.longitude_deg > 0.0);
+  REQUIRE_THAT(east.latitude_deg, WithinAbs(0.0, 1e-12));
+  REQUIRE(down.ellipsoid_height_m < 0.0);
+}
+
 TEST_CASE("FRD inertia uses negative Jxz and inverts") {
   const auto parameters = make_parameters();
   const auto identity =

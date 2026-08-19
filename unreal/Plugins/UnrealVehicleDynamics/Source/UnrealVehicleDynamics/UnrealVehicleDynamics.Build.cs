@@ -24,5 +24,14 @@ public class UnrealVehicleDynamics : ModuleRules
         PublicSystemIncludePaths.Add(EigenRoot);
         PrivateIncludePaths.Add(Path.Combine(RepositoryRoot, "core", "src"));
         PublicDefinitions.Add("EIGEN_MPL2_ONLY=1");
+
+        string ProjectCesium = Path.Combine(RepositoryRoot, "unreal", "Plugins", "CesiumForUnreal", "CesiumForUnreal.uplugin");
+        string EngineCesium = Path.Combine(EngineDirectory, "Plugins", "Marketplace", "CesiumForUnreal", "CesiumForUnreal.uplugin");
+        bool WithCesium = File.Exists(ProjectCesium) || File.Exists(EngineCesium);
+        PublicDefinitions.Add(WithCesium ? "UVD_WITH_CESIUM=1" : "UVD_WITH_CESIUM=0");
+        if (WithCesium)
+        {
+            PrivateDependencyModuleNames.Add("CesiumRuntime");
+        }
     }
 }

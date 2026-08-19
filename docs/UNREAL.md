@@ -1,8 +1,8 @@
 # Unreal setup
 
-The finite scripted Chaos smoke path is implemented without Cesium. This document describes the G0
-geospatial target that comes next; it should not be read as a claim that Cesium placement already
-works in the repository.
+The finite scripted Chaos path and local G0 geospatial acceptance are implemented. G0 creates a
+real Cesium georeference in the normal Open World; streamed ion terrain remains optional visual
+work and is not part of the coordinate acceptance.
 
 Cesium loads the real-world map. Unreal spawns the vehicle in that map. Chaos moves the vehicle,
 while the C++ core calculates its aerodynamic, propulsion, or marine forces.
@@ -29,10 +29,10 @@ The vehicle can start at any valid location covered by the selected Cesium tiles
 Unreal reads the LLA and heading, moves the Cesium map origin there, and spawns the vehicle at that
 point. Air-start physics does not wait for terrain to finish streaming.
 
-Use Unreal Engine 5.8 (5.8.1 is the tested macOS baseline) and [Cesium for Unreal
-2.28.0](https://github.com/CesiumGS/cesium-unreal/releases/tag/v2.28.0). The first coordinate probe
-only needs a `CesiumGeoreference`, a camera, the aircraft, and the simulation component. The map
-smoke test then adds Cesium World Terrain; aerial imagery and `CesiumSunSky` are optional visuals.
+Use Unreal Engine 5.8 (5.8.1 is the tested macOS baseline) and a Cesium for Unreal release that
+declares UE 5.8 support (2.29.0 is the tested baseline). The coordinate probe only needs a
+`CesiumGeoreference`, a camera, the aircraft, and the simulation component. A later map smoke can
+add Cesium World Terrain; aerial imagery and `CesiumSunSky` are optional visuals.
 
 The run config stores the map asset IDs and starting LLA. The Cesium ion token comes from
 `CESIUM_ION_TOKEN` and is not saved in the repo or run logs. The project bootstrap reads that
@@ -66,9 +66,11 @@ Boat work uses the same map and LLA path. Unreal Water supplies the actual water
 supplies the surrounding terrain and imagery. Disable Cesium's water appearance in the test area so
 Unreal Water is the only displaced surface.
 
-This groundwork is done when the vehicle spawns at its configured LLA, North and East are not
-swapped, altitude matches Mission Planner, Mission Planner's position agrees with the LLA derived
-from the same NED state, and turning Cesium on does not change the calculated vehicle forces.
+`verification/unreal_g0.py` proves the local groundwork with matched reference and Cesium sessions.
+The saved report checks configured LLA and heading, North/East/Down direction, signed MSL to
+ellipsoid height, coordinate round trip, and that turning Cesium on does not change the model wrench
+beyond numerical noise. Mission Planner comparison and streamed-terrain visuals can be added later
+without changing the controls feedback path.
 
 Very long cross-country or global runs may eventually need a moving local physics frame as Earth's
 curvature changes the local gravity direction.

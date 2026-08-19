@@ -384,7 +384,7 @@ ticks and signal IDs. A different clock needs an explicit resampling rule.
 | B0 | licenses and dependency lock | implemented and passing |
 | A1-A4 | [aircraft model](AERO.md) | implemented; reference-model and numerical checks pass |
 | B1 | Linux/macOS UE setup | UE 5.8 macOS build and smoke pass; Linux release host remains |
-| G0 | [Cesium groundwork](UNREAL.md) | not yet accepted |
+| G0 | [Cesium groundwork](UNREAL.md) | real Cesium georeference and matched reference/Cesium suite pass locally; Linux repeat remains |
 | U0 | Unreal mechanics and pacing probe | full local macOS suite passes; Linux repeat remains for release evidence |
 | U1 | aircraft in Unreal | matched-state wrench and timestep-refinement suite passes locally; Linux repeat remains |
 | U2 | full Chaos and UDP exchange | live 240-frame Unreal/ArduPlane exchange and five-case local fault suite pass; Linux repeat remains |

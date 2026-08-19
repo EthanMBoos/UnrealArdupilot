@@ -42,7 +42,8 @@ fixed physics clock, world, actor, and collisions while the core supplies the
 vehicle math. When Chaos owns motion, the Unreal component gives the core a state in
 standard SI and NED/FRD coordinates on each physics tick. The core returns a
 body force and moment and the component applies it once. The closed-loop
-controller connection and full per-tick evidence stream remain v1 work.
+controller connection, readiness gating, and full per-tick evidence stream are
+implemented for the local ArduPlane acceptance case.
 
 The headless CLI replaces Chaos with the core's built-in motion solver. That
 solver turns forces and moments into the next vehicle state using a standard
@@ -95,6 +96,7 @@ Chaos smoke case:
 ```bash
 build/uvd unreal examples/runs/unreal_smoke.json --preflight
 build/uvd unreal examples/runs/unreal_smoke.json
+python3 verification/unreal_g0.py --uvd build/uvd
 python3 verification/unreal_u0.py --uvd build/uvd
 python3 verification/unreal_u1.py --uvd build/uvd
 python3 verification/unreal_u2.py --uvd build/uvd
@@ -132,8 +134,9 @@ ArduPlane container now also completes a live 240-frame lockstep exchange with
 Unreal, and the local U2 suite verifies duplicate, gap, stale, malformed, and
 timeout handling in the real plugin. A readiness-gated local U3 flight now arms
 ArduPlane in FBWA, releases stable PWM into Chaos, and passes a cross-backend
-command replay. Cesium placement and the Linux acceptance repeat remain before
-the project is a proven v1. See
+command replay. The local G0 suite verifies a real Cesium georeference,
+WGS84/MSL placement, axes, heading, and matched-state wrench isolation. The
+Linux acceptance repeat remains before the project is a proven v1. See
 [V1.md](docs/V1.md) for the exact evidence gate.
 
 ## License

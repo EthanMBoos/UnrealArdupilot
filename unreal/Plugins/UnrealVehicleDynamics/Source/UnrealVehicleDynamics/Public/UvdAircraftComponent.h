@@ -58,6 +58,7 @@ class UNREALVEHICLEDYNAMICS_API UUvdAircraftComponent : public UActorComponent {
   bool LoadRun();
   bool LoadAircraft();
   bool ConfigureBody();
+  bool ConfigureGeospatial();
   void FinishRun();
   void SetInitialState();
 

@@ -18,6 +18,19 @@ using Vector4 = Eigen::Vector4d;
 using Matrix3 = Eigen::Matrix3d;
 using Quaternion = Eigen::Quaterniond;
 
+struct GeodeticPosition {
+  double latitude_deg{};
+  double longitude_deg{};
+  double ellipsoid_height_m{};
+};
+
+[[nodiscard]] double ellipsoid_height_from_msl(
+    double altitude_msl_m, double geoid_undulation_m) noexcept;
+[[nodiscard]] GeodeticPosition geodetic_from_ned(
+    const GeodeticPosition& origin, const Vector3& position_ned_m) noexcept;
+[[nodiscard]] Vector3 ned_from_geodetic(
+    const GeodeticPosition& origin, const GeodeticPosition& position) noexcept;
+
 // Quaternion conventions are Hamilton (w, x, y, z), active, body to NED.
 [[nodiscard]] Quaternion normalize_quaternion(Quaternion q) noexcept;
 [[nodiscard]] Quaternion canonicalize(Quaternion q) noexcept;
