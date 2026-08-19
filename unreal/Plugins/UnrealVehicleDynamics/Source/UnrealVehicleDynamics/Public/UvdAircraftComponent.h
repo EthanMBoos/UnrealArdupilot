@@ -26,6 +26,7 @@ class UNREALVEHICLEDYNAMICS_API UUvdAircraftComponent : public UActorComponent {
  private:
   bool LoadConfiguration();
   bool ConfigureBody();
+  bool ConfigureVisual();
   bool ConfigureCesium();
   void ActivateChaseView();
   void SetInitialState();

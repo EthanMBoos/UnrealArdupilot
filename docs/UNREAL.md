@@ -38,6 +38,31 @@ built-in ellipsoid.
 The aircraft starts above the origin and does not wait for terrain streaming. Terrain is scenery in
 v1; takeoff, landing, and collision behavior are future work.
 
+## Aircraft visual
+
+Chaos uses a hidden simple body whose mass and inertia come from the aircraft file. The visible
+mesh is a non-colliding child and does not change the vehicle dynamics. With no visual
+configuration, Unreal builds the included generic fixed-wing shape using the aircraft span and
+chord.
+
+To use another static mesh, import a GLB or FBX into the Unreal project and add this optional block
+to the aircraft JSON:
+
+```json
+"visual": {
+  "asset": "/Game/Aircraft/MyAircraft/SM_MyAircraft.SM_MyAircraft",
+  "scale": 1.0,
+  "rotation_rpy_deg": [0.0, 0.0, 0.0],
+  "offset_body_m": [0.0, 0.0, 0.0]
+}
+```
+
+Use the Static Mesh asset's copied object path. The offset is expressed in the core's FRD body
+frame from the vehicle CG to the mesh origin. Rotation aligns the imported mesh with Unreal body
+axes: X forward, Y right, and Z up. If the asset cannot be loaded, the generic aircraft remains the
+fallback. Aircraft-specific contact geometry and animated control surfaces are separate future
+options, not requirements for using a plant.
+
 ## Runtime ownership
 
 For the aircraft, Chaos owns position, velocity, attitude, collision, and the fixed physics step.

@@ -7,13 +7,18 @@
 #include "Chaos/ChaosEngineInterface.h"
 #include "Common/UdpSocketBuilder.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Dom/JsonObject.h"
 #include "Eigen/Eigenvalues"
+#include "Engine/StaticMesh.h"
+#include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformTime.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Physics/Experimental/PhysInterface_Chaos.h"
@@ -24,6 +29,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "SocketSubsystem.h"
 #include "Sockets.h"
+#include "UObject/SoftObjectPath.h"
 #include "uvd/core.hpp"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUvdAircraft, Log, All);
@@ -41,6 +47,13 @@ struct FUvdPwmMapping {
   uvd::PwmCalibration Calibration;
 };
 
+struct FUvdVisualConfiguration {
+  FString AssetPath;
+  double UniformScale = 1.0;
+  FVector OffsetBodyM = FVector::ZeroVector;
+  FRotator Rotation = FRotator::ZeroRotator;
+};
+
 struct FUvdAircraftRuntime {
   uvd::AerosondeParameters Parameters;
   TArray<FUvdPwmMapping> PwmMappings;
@@ -50,6 +63,7 @@ struct FUvdAircraftRuntime {
   uvd::AircraftCommand ControllerCommand;
   uvd::Vector3 WindNedMps = uvd::Vector3::Zero();
   uvd::GeodeticPosition Origin;
+  FUvdVisualConfiguration Visual;
   double OriginAltitudeMslM = 0.0;
   double FixedDtS = 1.0 / 120.0;
   int64 TilesetAssetId = 1;
@@ -127,6 +141,22 @@ uvd::Vector3 JsonVector(const TSharedPtr<FJsonObject>& Object,
   return {Values[0]->AsNumber(), Values[1]->AsNumber(), Values[2]->AsNumber()};
 }
 
+bool JsonFVector(const TSharedPtr<FJsonObject>& Object, const TCHAR* Name,
+                 FVector& Result) {
+  const TArray<TSharedPtr<FJsonValue>>& Values = Object->GetArrayField(Name);
+  if (Values.Num() != 3) {
+    return false;
+  }
+  const FVector Parsed{Values[0]->AsNumber(), Values[1]->AsNumber(),
+                       Values[2]->AsNumber()};
+  if (!FMath::IsFinite(Parsed.X) || !FMath::IsFinite(Parsed.Y) ||
+      !FMath::IsFinite(Parsed.Z)) {
+    return false;
+  }
+  Result = Parsed;
+  return true;
+}
+
 uvd::Quaternion JsonQuaternion(const TSharedPtr<FJsonObject>& Object,
                                const TCHAR* Name) {
   const TArray<TSharedPtr<FJsonValue>>& Values = Object->GetArrayField(Name);
@@ -162,6 +192,42 @@ bool ReadJson(const FString& Path, TSharedPtr<FJsonObject>& Root) {
     return false;
   }
   return true;
+}
+
+UMaterialInstanceDynamic* CreateAircraftMaterial(AActor* Owner,
+                                                 const FLinearColor& Color) {
+  UMaterialInterface* Base = LoadObject<UMaterialInterface>(
+      nullptr,
+      TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+  if (!Base) {
+    return nullptr;
+  }
+  UMaterialInstanceDynamic* Material =
+      UMaterialInstanceDynamic::Create(Base, Owner);
+  Material->SetVectorParameterValue(TEXT("Color"), Color);
+  return Material;
+}
+
+UStaticMeshComponent* AddVisualPart(AActor* Owner, UPrimitiveComponent* Body,
+                                    const FName Name, UStaticMesh* Mesh,
+                                    const FVector& Location,
+                                    const FRotator& Rotation,
+                                    const FVector& Scale,
+                                    UMaterialInterface* Material) {
+  UStaticMeshComponent* Part = NewObject<UStaticMeshComponent>(Owner, Name);
+  Part->SetStaticMesh(Mesh);
+  Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  Part->SetGenerateOverlapEvents(false);
+  Part->SetCanEverAffectNavigation(false);
+  Part->SetupAttachment(Body);
+  Part->SetRelativeLocation(Location);
+  Part->SetRelativeRotation(Rotation);
+  Part->SetRelativeScale3D(Scale);
+  if (Material) {
+    Part->SetMaterial(0, Material);
+  }
+  Part->RegisterComponent();
+  return Part;
 }
 
 bool LoadAircraft(const FString& Path, FUvdAircraftRuntime& Runtime) {
@@ -280,6 +346,37 @@ bool LoadAircraft(const FString& Path, FUvdAircraftRuntime& Runtime) {
                 .throttle = Name == TEXT("throttle"),
             },
     });
+  }
+
+  if (Root->HasTypedField<EJson::Object>(TEXT("visual"))) {
+    const TSharedPtr<FJsonObject> Visual = Root->GetObjectField(TEXT("visual"));
+    Visual->TryGetStringField(TEXT("asset"), Runtime.Visual.AssetPath);
+    Visual->TryGetNumberField(TEXT("scale"), Runtime.Visual.UniformScale);
+    if (!FMath::IsFinite(Runtime.Visual.UniformScale) ||
+        Runtime.Visual.UniformScale <= 0.0) {
+      UE_LOG(LogUvdAircraft, Error,
+             TEXT("visual.scale must be a finite positive number"));
+      return false;
+    }
+    if (Visual->HasTypedField<EJson::Array>(TEXT("offset_body_m"))) {
+      if (!JsonFVector(Visual, TEXT("offset_body_m"),
+                       Runtime.Visual.OffsetBodyM)) {
+        UE_LOG(LogUvdAircraft, Error,
+               TEXT("visual.offset_body_m must contain three finite numbers"));
+        return false;
+      }
+    }
+    if (Visual->HasTypedField<EJson::Array>(TEXT("rotation_rpy_deg"))) {
+      FVector RollPitchYaw;
+      if (!JsonFVector(Visual, TEXT("rotation_rpy_deg"), RollPitchYaw)) {
+        UE_LOG(
+            LogUvdAircraft, Error,
+            TEXT("visual.rotation_rpy_deg must contain three finite numbers"));
+        return false;
+      }
+      Runtime.Visual.Rotation =
+          FRotator{RollPitchYaw.Y, RollPitchYaw.Z, RollPitchYaw.X};
+    }
   }
   return true;
 }
@@ -505,7 +602,8 @@ void UUvdAircraftComponent::BeginPlay() {
   Body = Cast<UPrimitiveComponent>(GetOwner()->GetRootComponent());
   Runtime = new FUvdAircraftRuntime();
   if (!Body || !Body->IsSimulatingPhysics() || !LoadConfiguration() ||
-      !ConfigureBody() || !ConfigureCesium() || !OpenSockets(*Runtime)) {
+      !ConfigureBody() || !ConfigureVisual() || !ConfigureCesium() ||
+      !OpenSockets(*Runtime)) {
     Runtime->Failed = true;
     UE_LOG(LogUvdAircraft, Error, TEXT("UVD startup failed"));
     return;
@@ -628,6 +726,108 @@ bool UUvdAircraftComponent::ConfigureBody() {
   Body->SetLinearDamping(0.0F);
   Body->SetAngularDamping(0.0F);
   Body->SetEnableGravity(true);
+  return true;
+}
+
+bool UUvdAircraftComponent::ConfigureVisual() {
+  AActor* Owner = GetOwner();
+  if (!Runtime->Visual.AssetPath.IsEmpty()) {
+    const FSoftObjectPath AssetPath{Runtime->Visual.AssetPath};
+    UStaticMesh* Mesh = Cast<UStaticMesh>(AssetPath.TryLoad());
+    if (Mesh) {
+      const FVector OffsetUnrealCm =
+          100.0 * FVector{Runtime->Visual.OffsetBodyM.X,
+                          Runtime->Visual.OffsetBodyM.Y,
+                          -Runtime->Visual.OffsetBodyM.Z};
+      AddVisualPart(
+          Owner, Body, TEXT("AircraftVisual"), Mesh, OffsetUnrealCm,
+          Runtime->Visual.Rotation,
+          FVector{Runtime->Visual.UniformScale, Runtime->Visual.UniformScale,
+                  Runtime->Visual.UniformScale},
+          nullptr);
+      UE_LOG(LogUvdAircraft, Display, TEXT("Aircraft visual: %s"),
+             *Runtime->Visual.AssetPath);
+      return true;
+    }
+    UE_LOG(LogUvdAircraft, Warning,
+           TEXT("Cannot load aircraft visual %s; using the generic aircraft"),
+           *Runtime->Visual.AssetPath);
+  }
+
+  UStaticMesh* Cube =
+      LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+  UStaticMesh* Cylinder = LoadObject<UStaticMesh>(
+      nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+  UStaticMesh* Sphere = LoadObject<UStaticMesh>(
+      nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+  if (!Cube || !Cylinder || !Sphere) {
+    UE_LOG(
+        LogUvdAircraft, Error,
+        TEXT("Cannot load Unreal's built-in meshes for the generic aircraft"));
+    return false;
+  }
+
+  UMaterialInstanceDynamic* BodyMaterial =
+      CreateAircraftMaterial(Owner, FLinearColor{0.025F, 0.08F, 0.18F, 1.0F});
+  UMaterialInstanceDynamic* WingMaterial =
+      CreateAircraftMaterial(Owner, FLinearColor{0.9F, 0.22F, 0.025F, 1.0F});
+  UMaterialInstanceDynamic* AccentMaterial =
+      CreateAircraftMaterial(Owner, FLinearColor{0.85F, 0.88F, 0.92F, 1.0F});
+
+  const double SpanCm = FMath::Max(100.0, 100.0 * Runtime->Parameters.span_m);
+  const double ChordCm = FMath::Max(15.0, 100.0 * Runtime->Parameters.chord_m);
+  const double FuselageLengthCm = FMath::Max(6.0 * ChordCm, 0.60 * SpanCm);
+  const double FuselageDiameterCm = FMath::Max(14.0, 0.06 * SpanCm);
+  const double NoseLengthCm = 0.18 * FuselageLengthCm;
+  const double WingChordCm = FMath::Max(1.7 * ChordCm, 0.12 * SpanCm);
+  const double WingThicknessCm = FMath::Max(3.0, 0.012 * SpanCm);
+  const double HalfWingSpanCm = 0.5 * SpanCm;
+  const double TailBoomLengthCm = 0.36 * SpanCm;
+  const double TailSpanCm = 0.36 * SpanCm;
+  const double TailChordCm = FMath::Max(ChordCm, 0.10 * SpanCm);
+  const double TailX = -0.62 * SpanCm;
+
+  AddVisualPart(Owner, Body, TEXT("GenericFuselage"), Cylinder,
+                FVector::ZeroVector, FRotator{90.0, 0.0, 0.0},
+                FVector{FuselageDiameterCm / 100.0, FuselageDiameterCm / 100.0,
+                        FuselageLengthCm / 100.0},
+                BodyMaterial);
+  AddVisualPart(Owner, Body, TEXT("GenericNose"), Sphere,
+                FVector{0.5 * FuselageLengthCm, 0.0, 0.0},
+                FRotator::ZeroRotator,
+                FVector{NoseLengthCm / 100.0, FuselageDiameterCm / 100.0,
+                        FuselageDiameterCm / 100.0},
+                AccentMaterial);
+  AddVisualPart(
+      Owner, Body, TEXT("GenericTailBoom"), Cylinder,
+      FVector{-0.5 * FuselageLengthCm - 0.42 * TailBoomLengthCm, 0.0, 0.0},
+      FRotator{90.0, 0.0, 0.0},
+      FVector{0.35 * FuselageDiameterCm / 100.0,
+              0.35 * FuselageDiameterCm / 100.0, TailBoomLengthCm / 100.0},
+      BodyMaterial);
+  AddVisualPart(Owner, Body, TEXT("GenericRightWing"), Cube,
+                FVector{0.0, 0.25 * SpanCm, 0.0}, FRotator{0.0, 4.0, 3.0},
+                FVector{WingChordCm / 100.0, HalfWingSpanCm / 100.0,
+                        WingThicknessCm / 100.0},
+                WingMaterial);
+  AddVisualPart(Owner, Body, TEXT("GenericLeftWing"), Cube,
+                FVector{0.0, -0.25 * SpanCm, 0.0}, FRotator{0.0, -4.0, -3.0},
+                FVector{WingChordCm / 100.0, HalfWingSpanCm / 100.0,
+                        WingThicknessCm / 100.0},
+                WingMaterial);
+  AddVisualPart(Owner, Body, TEXT("GenericTailPlane"), Cube,
+                FVector{TailX, 0.0, 0.0}, FRotator::ZeroRotator,
+                FVector{TailChordCm / 100.0, TailSpanCm / 100.0,
+                        0.7 * WingThicknessCm / 100.0},
+                WingMaterial);
+  AddVisualPart(Owner, Body, TEXT("GenericVerticalTail"), Cube,
+                FVector{TailX, 0.0, 0.5 * TailSpanCm * 0.45},
+                FRotator::ZeroRotator,
+                FVector{TailChordCm / 100.0, 0.7 * WingThicknessCm / 100.0,
+                        0.45 * TailSpanCm / 100.0},
+                WingMaterial);
+
+  UE_LOG(LogUvdAircraft, Display, TEXT("Aircraft visual: generic fixed wing"));
   return true;
 }
 

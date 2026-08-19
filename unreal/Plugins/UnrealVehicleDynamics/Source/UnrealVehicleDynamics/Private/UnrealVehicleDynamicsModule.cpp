@@ -1,6 +1,5 @@
 #include "Camera/CameraComponent.h"
-#include "Components/StaticMeshComponent.h"
-#include "Engine/StaticMesh.h"
+#include "Components/BoxComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "HAL/IConsoleManager.h"
@@ -41,35 +40,13 @@ class FUnrealVehicleDynamicsModule final : public IModuleInterface {
       return;
     }
     AActor* Aircraft = World->SpawnActor<AActor>();
-    UStaticMeshComponent* Body =
-        NewObject<UStaticMeshComponent>(Aircraft, TEXT("AircraftBody"));
-    UStaticMesh* Cube =
-        LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
-    Body->SetStaticMesh(Cube);
-    Body->SetWorldScale3D(FVector{0.8, 0.12, 0.12});
+    UBoxComponent* Body =
+        NewObject<UBoxComponent>(Aircraft, TEXT("AircraftPhysicsBody"));
+    Body->SetBoxExtent(FVector{40.0, 6.0, 6.0});
     Body->SetCollisionProfileName(TEXT("PhysicsActor"));
     Aircraft->SetRootComponent(Body);
     Body->RegisterComponent();
     Body->SetSimulatePhysics(true);
-
-    const auto AddVisualPart = [Aircraft, Body, Cube](const TCHAR* Name,
-                                                      const FVector& Location,
-                                                      const FVector& Scale) {
-      UStaticMeshComponent* Part =
-          NewObject<UStaticMeshComponent>(Aircraft, Name);
-      Part->SetStaticMesh(Cube);
-      Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-      Part->SetupAttachment(Body);
-      Part->SetRelativeLocation(Location);
-      Part->SetRelativeScale3D(Scale);
-      Part->RegisterComponent();
-    };
-    AddVisualPart(TEXT("MainWing"), FVector{-5.0, 0.0, 0.0},
-                  FVector{0.22, 1.25, 0.035});
-    AddVisualPart(TEXT("TailPlane"), FVector{-65.0, 0.0, 0.0},
-                  FVector{0.15, 0.45, 0.025});
-    AddVisualPart(TEXT("VerticalTail"), FVector{-65.0, 0.0, 18.0},
-                  FVector{0.15, 0.025, 0.22});
 
     UCameraComponent* Camera =
         NewObject<UCameraComponent>(Aircraft, TEXT("ChaseCamera"));
